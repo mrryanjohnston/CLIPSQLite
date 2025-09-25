@@ -442,6 +442,13 @@ Return the number of parameters that can be bound to a prepared statement.
 - `<INTEGER>` - Number of parameters
 - `<BOOLEAN>` - `FALSE` if something went wrong
 
+#### Example
+
+```clips
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-bind-parameter-count ?*stmt-m4*) ; 2
+```
+
 ### `(sqlite-bind-parameter-index <STATEMENT-POINTER> <PARAMETER-NAME>)` -> `INTEGER` or `BOOLEAN`
 
 Returns the index of a named parameter in a prepared statement.
@@ -449,24 +456,86 @@ Returns the index of a named parameter in a prepared statement.
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<PARAMETER-NAME>` - The name of the parameter who's index to find.
+
+#### Returns
+
+- `<INTEGER>` - the index of the named parameter
+- `<BOOLEAN>` - `FALSE` if parameter with this name is not present in prepared statement
+
+#### Example
+
+```clips
+(defglobal ?*stmt-n* = (sqlite-prepare ?*db* "SELECT :x AS xx, :y AS yy"))
+(sqlite-bind-parameter-index ?*stmt-n* :x) ; 1
+(sqlite-bind-parameter-index ?*stmt-n* :y) ; 2
+```
 
 ### `(sqlite-bind-parameter-name <STATEMENT-POINTER> <PARAMETER-INDEX>)` -> `SYMBOL` or `BOOLEAN`
 
+Get the name of a parameter in a prepared statement at the specified index.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<PARAMETER-INDEX>` - An `INTEGER` specifying the index of the parameter who's name to get
+
+#### Returns
+
+- `<SYMBOL>` - The name of the named parameter at the specified `<PARAMETER-INDEX>` in the prepared statement
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-n* = (sqlite-prepare ?*db* "SELECT :x AS xx, :y AS yy"))
+(sqlite-bind-parameter-name ?*stmt-n* 1) ; :x
+(sqlite-bind-parameter-name ?*stmt-n* 2) ; :y
+```
 
 ### `(sqlite-sql <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
 
+Gets the query for the prepared statement before parameter replacement takes place.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+
+#### Returns
+
+- `<STRING>` - The SQL query before replacing any variables
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-n* = (sqlite-prepare ?*db* "SELECT :x AS xx, :y AS yy"))
+(sqlite-sql ?*stmt-n*) ; "SELECT :x AS xx, :y AS yy"
+```
 
 ### `(sqlite-expanded-sql <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
 
+Returns the query of a prepared statement after the bound parameters have been replaced
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+
+#### Returns
+
+- `<STRING>` - The SQL query after replacing any variables
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-n* = (sqlite-prepare ?*db* "SELECT :x AS xx, :y AS yy"))
+(sqlite-expanded-sql ?*stmt-n*) ; "SELECT NULL AS xx, NULL AS yy"
+(sqlite-bind ?*stmt-n* :x "hello")
+(sqlite-expanded-sql ?*stmt-n*) ; "SELECT 'hello' AS xx, NULL AS yy"
+(sqlite-bind ?*stmt-n* :y 123)
+(sqlite-expanded-sql ?*stmt-n*) ; "SELECT 'hello' AS xx, 123 AS yy"
+```
 
 ### `(sqlite-normalized-sql <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
 
@@ -474,41 +543,154 @@ Returns the index of a named parameter in a prepared statement.
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
 
-### `(sqlite-reset <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
+### `(sqlite-reset <STATEMENT-POINTER>)` -> `BOOLEAN`
+
+Returns the prepared statement to the state it was in
+before any `sqlite-step` functions were called on it.
 
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
 
-### `(sqlite-clear-bindings <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
+#### Returns
+
+- `<BOOLEAN>` - `TRUE` if successfully reset, `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(sqlite-reset ?*stmt-n*) ; TRUE
+(sqlite-step ?*stmt-n*) ; SQLITE_ROW
+(sqlite-step ?*stmt-n*) ; SQLITE_DONE
+(sqlite-reset ?*stmt-n*) ; TRUE
+(sqlite-step ?*stmt-n*) ; SQLITE_ROW
+```
+
+### `(sqlite-clear-bindings <STATEMENT-POINTER>)` -> `BOOLEAN`
+
+Clear bound variables from a prepared statement.
 
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
 
-### `(sqlite-step <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
+#### Returns
+
+- `<BOOLEAN>` - `TRUE` if successfully cleared bound variables, `FALSE` if not
+
+#### Example
+
+```clips
+(sqlite-expanded-sql ?*stmt-o*) ; "SELECT 'alpha', 42, 3.14"
+(sqlite-clear-bindings ?*stmt-o*)
+(sqlite-expanded-sql ?*stmt-o*) ; "SELECT NULL, NULL, NULL"
+```
+
+### `(sqlite-step <STATEMENT-POINTER>)` -> `SYMBOL` or `BOOLEAN`
+
+"Executes" the SQL query, moving to the next row of results.
+Call this multiple times to iterate through results of a `SELECT`.
 
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+
+#### Returns
+
+- `SQLITE_ROW` - The statement is now pointed at a result row
+- `SQLITE_DONE` - There are no more results to iterate
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-bind ?*stmt-o* (create$ "alpha" 42 3.14))
+(sqlite-step ?*stmt-o*) ; SQLITE_ROW
+(sqlite-step ?*stmt-o*) ; SQLITE_DONE
+```
 
 ### `(sqlite-row-to-multifield <STATEMENT-POINTER>)` -> `MULTIFIELD` or `BOOLEAN`
 
+Returns a multifield with values from the current row of a prepared statement
+after a `sqlite-step`.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+
+#### Returns
+
+- `<MULTIFIELD>` - A multifield with values from the current row of a prepared statemnt.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-bind ?*stmt-m4* 1 1)
+(sqlite-bind ?*stmt-m4* 2 "%oo b%")
+(sqlite-step ?*stmt-m4*)
+(sqlite-row-to-multifield ?*stmt-m4*) ; (1 "Foo baz")
+```
 
 ### `(sqlite-row-to-fact <STATEMENT-POINTER> <DEFTEMPLATE-NAME>)` -> `FACT` or `BOOLEAN`
 
+Returns an asserted Fact with the slot values from the current row of a prepared statement.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<DEFTEMPLATE-NAME>` - A symbol of a deftemplate of the fact that should be asserted from the current row of the prepared statement
+
+#### Returns
+
+- `<FACT>` - The asserted fact with values from the prepared statement row
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-bind ?*stmt-m4* 1 1)
+(sqlite-bind ?*stmt-m4* 2 "%oo b%")
+(sqlite-step ?*stmt-m4*)
+(deftemplate row
+	(slot id)
+	(slot name))
+(sqlite-row-to-fact ?*stmt-m4* row) ; <Fact-1>
+(ppfact 1) ; (row 
+           ;    (id 1) 
+           ;    (name "Foo baz"))
+```
 
 ### `(sqlite-row-to-instance <STATEMENT-POINTER> <DEFCLASS-NAME> [<INSTANCE-NAME>] [<NAME-COLUMN-SLOT>])` -> `INSTANCE` or `BOOLEAN`
 
+Returns the current row of the prepared statement as a COOL instance.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<DEFCLASS-NAME>` - The name of the defclass for which the instance should be made from
+- `[<INSTANCE-NAME>] - The name of the instance to make. Optional or `nil` to leave default
+- `[<NAME-COLUMN-SLOT>]` - Since defclasses can't have a slot named `name`, this allows specifying the name of the slot which will be set with the value from the query result's `name` column. Leave empty to use the default `_name`
+
+#### Returns
+
+- `<INSTANCE>` - An instance for a given defclass with slots set to values from the columns of a result of the prepared statement
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+```clips
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-bind ?*stmt-m4* 1 1)
+(sqlite-bind ?*stmt-m4* 2 "%oo b%")
+(sqlite-step ?*stmt-m4*)
+(defclass ROW
+	(is-a USER)
+	(slot id)
+	(slot _name))
+(defglobal ?*instance* = (sqlite-row-to-instance ?*stmt-m4* ROW))
+(instance-name ?*instance*) ; [gen-1]
+(send ?*instance* get-id) ; 1
+(send ?*instance* get-_name) ; "Foo baz"
+```
 
 ### `(sqlite-column-count <STATEMENT-POINTER>)` -> `INTEGER` or `BOOLEAN`
 

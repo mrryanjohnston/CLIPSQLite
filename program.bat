@@ -190,6 +190,10 @@
 	(sqlite-bind ?*stmt-o* (create$ "alpha" 42 3.14))
 	"Encountered issue with sqlite-bind")
 (expect
+	0
+	(sqlite-data-count ?*stmt-o*)
+	"Expected 0 columns of data before first sqlite-step")
+(expect
 	SQLITE_ROW
 	(sqlite-step ?*stmt-o*)
 	"Expected SQLITE_ROW for first sqlite-step")
@@ -197,6 +201,10 @@
 	(create$ "alpha" 42 3.14)
 	(sqlite-row-to-multifield ?*stmt-o*)
 	"Expected multifield of row")
+(expect
+	3
+	(sqlite-data-count ?*stmt-o*)
+	"Expected 3 columns of data after first sqlite-step")
 (expect
 	FALSE
 	(sqlite-column-database-name ?*stmt-o* 1)
@@ -213,6 +221,14 @@
 	SQLITE_DONE
 	(sqlite-step ?*stmt-o*)
 	"Expected SQLITE_DONE for second sqlite-step")
+(expect
+	0
+	(sqlite-data-count ?*stmt-o*)
+	"Expected 0 columns of data after SQLITE_DONE sqlite-step")
+(expect
+	(create$ nil nil nil)
+	(sqlite-row-to-multifield ?*stmt-o*)
+	"Expected a multifield filled with the number of column nils from SQLITE_DONE perpared statement")
 (expect
 	TRUE
 	(sqlite-reset ?*stmt-o*)
@@ -488,6 +504,11 @@
 	"SELECT * FROM foos WHERE id=1 AND name LIKE '%oo b%'"
 	(sqlite-expanded-sql ?*stmt-m4*)
 	"Expected id and LIKE to be replaced by bindings")
+
+(expect
+	(create$ nil nil)
+	(sqlite-row-to-multifield ?*stmt-m4*)
+	"Expected column names from sqlite-row-to-multifield before sqlite-step")
 
 (expect
 	SQLITE_ROW

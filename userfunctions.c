@@ -1429,6 +1429,29 @@ void SqliteColumnFunction(Environment *theEnv, UDFContext *context, UDFValue *re
 	}
 }
 
+void SqliteDataCountFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	UDFValue theArg;
+	sqlite3_stmt *stmt;
+
+	UDFNextArgument(context, EXTERNAL_ADDRESS_BIT, &theArg);
+	if (theArg.header->type != EXTERNAL_ADDRESS_TYPE)
+	{
+		WriteString(theEnv, STDERR, "sqlite-data-count: first arg must be a statement pointer\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
+	}
+
+	if (!(stmt = (sqlite3_stmt *) theArg.externalAddressValue->contents)) {
+		WriteString(theEnv, STDERR, "sqlite-data-count: statement pointer is NULL\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
+	}
+
+	returnValue->integerValue = CreateInteger(theEnv, sqlite3_data_count(stmt));
+}
+
+
 void SqliteErrmsgFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
 {
 	UDFValue theArg;
@@ -2149,6 +2172,7 @@ void UserFunctions(
 	AddUDF(env,"sqlite-column-name","bs",2,2,";e;l",SqliteColumnNameFunction,"SqliteColumnNameFunction",NULL);
 	AddUDF(env,"sqlite-column-type","by",2,2,";e;l",SqliteColumnTypeFunction,"SqliteColumnTypeFunction",NULL);
 	AddUDF(env,"sqlite-column","bdls",2,2,";e;l",SqliteColumnFunction,"SqliteColumnFunction",NULL);
+	AddUDF(env,"sqlite-data-count","bl",1,1,";e",SqliteDataCountFunction,"SqliteDataCountFunction",NULL);
 
 	AddUDF(env,"sqlite-errmsg","bs",1,1,";e",SqliteErrmsgFunction,"SqliteErrmsgFunction",NULL);
 
