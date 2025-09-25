@@ -8,7 +8,6 @@ LIBEXECDIR    := $(PREFIX)/libexec/$(DESTINATION)-$(VERSION)
 
 # System-wide share dir for CLIPSQLite data
 DATADIR       := $(PREFIX)/share/$(DESTINATION)
-DATAFILES     := deftemplates.clp defclasses.clp
 
 CLIPS_VER     := 6.4.2
 ARCHIVE       := clips_core_source_642.tar.gz
