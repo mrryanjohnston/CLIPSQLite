@@ -206,7 +206,7 @@ due to the last run query.
 #### Example
 
 ```clips
-(defglobal ?*stmt* (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('bar', 'baz')))
+(defglobal ?*stmt* = (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('bar', 'baz')))
 (sqlite-step ?*stmt*)
 (println "Inserted " (sqlite-changes ?*db*) " records.") ; Inserted 2 records.
 ```
@@ -220,10 +220,10 @@ due to the last run query.
 #### Example
 
 ```clips
-(defglobal ?*stmt* (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('bar', 'baz')))
+(defglobal ?*stmt* = (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('bar', 'baz')))
 (sqlite-step ?*stmt*)
 (sqlite-finalize ?*stmt*)
-(defglobal ?*stmt* (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('zub', 'zab')))
+(defglobal ?*stmt* = (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('zub', 'zab')))
 (println "Inserted " (sqlite-total-changes ?*db*) " records total.") ; Inserted 4 records total.
 ```
 
@@ -236,7 +236,7 @@ due to the last run query.
 #### Example
 
 ```clips
-(defglobal ?*stmt* (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('bar', 'baz')))
+(defglobal ?*stmt* = (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('bar', 'baz')))
 (sqlite-step ?*stmt*)
 (println "Last inserted id: " (sqlite-last-insert-rowid ?*db*)) ; Last inserted id: 2
 ```
