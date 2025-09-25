@@ -422,13 +422,29 @@ Dispose of the prepared statement when done with it.
 
 - `<BOOLEAN>` - `TRUE` if successfully finalized.
 
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-finalize ?*stmt-o*) ; TRUE
+```
+
 ### `(sqlite-bind-parameter-count <STATEMENT-POINTER>)` -> `INTEGER` or `BOOLEAN`
+
+Return the number of parameters that can be bound to a prepared statement.
 
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
 
+#### Returns
+
+- `<INTEGER>` - Number of parameters
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
 ### `(sqlite-bind-parameter-index <STATEMENT-POINTER> <PARAMETER-NAME>)` -> `INTEGER` or `BOOLEAN`
+
+Returns the index of a named parameter in a prepared statement.
 
 #### Arguments
 
