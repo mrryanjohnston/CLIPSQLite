@@ -1,3 +1,5 @@
+<img width="860" height="800" alt="CLIPSQLite" src="https://github.com/user-attachments/assets/2371fd64-ee9d-4128-b806-c9177bc093aa" />
+
 # CLIPSQLite
 
 A SQLite library for CLIPS
