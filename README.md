@@ -694,58 +694,256 @@ Returns the current row of the prepared statement as a COOL instance.
 
 ### `(sqlite-column-count <STATEMENT-POINTER>)` -> `INTEGER` or `BOOLEAN`
 
+Returns the number of columns for the records of the prepared statement.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+
+#### Returns
+
+- `<INTEGER>` - The number of columns
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-column-count ?*stmt-o*) ; 3
+```
 
 ### `(sqlite-column-database-name <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING` or `BOOLEAN`
 
+Returns the name of the database the column in the results is from
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<COLUMN-INDEX>` - The index of the column to return the name of the database from
+
+#### Returns
+
+- `<STRING>` - The name of the database the column is from
+- `<BOOLEAN>` - `FALSE` if something goes wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-step ?*stmt-o*)
+(sqlite-column-database-name ?*stmt-o* 1) ; FALSE
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-step ?*stmt-m4*)
+(sqlite-column-database-name ?*stmt-m4* 1)
+```
 
 ### `(sqlite-column-origin-name <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING` or `BOOLEAN`
 
+Return the original name of the column that provides the values
+for the given column index.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<COLUMN-INDEX>` - The index of the column to return the column name from
+
+#### Returns
+
+- `<STRING>` - The name of the origin column
+- `<BOOLEAN>` - `FALSE` if something goes wrong or if there is no origin column
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-step ?*stmt-o*)
+(sqlite-column-origin-name ?*stmt-o* 1) ; FALSE
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-step ?*stmt-m4*)
+(sqlite-column-origin-name ?*stmt-m4* 1) ; "name"
+```
 
 ### `(sqlite-column-table-name <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING` or `BOOLEAN`
 
+Return the name of the table the column comes from in a prepared statement
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<COLUMN-INDEX>` - The index of the column to return the column name from
+
+#### Returns
+
+- `<STRING>` - The name of the table
+- `<BOOLEAN>` - `FALSE` if something goes wrong or the column does not come from a table
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-step ?*stmt-o*)
+(sqlite-column-table-name ?*stmt-o* 1) ; FALSE
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-step ?*stmt-m4*)
+(sqlite-column-table-name ?*stmt-m4* 1) ; "foos"
+```
 
 ### `(sqlite-column-name <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING` or `BOOLEAN`
 
-#### Arguments
-
-- `<STATEMENT-POINTER>` - A pointer to a prepared statement.
-
-### `(sqlite-column-type <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING` or `BOOLEAN`
+Returns the name of the column at column index in a statement
 
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<COLUMN-INDEX>` - The index of the column to return the column name from
 
-### `(sqlite-column <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING`, `INTEGER`, `DOUBLE`, or `BOOLEAN`
+#### Returns
+
+- `<STRING>` - The name of the column
+- `<BOOLEAN>` - `FALSE` if something goes wrong or the column does not have a name
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-step ?*stmt-o*)
+(sqlite-column-name ?*stmt-o* 0) ; ?1
+(defglobal ?*stmt-n* = (sqlite-prepare ?*db* "SELECT :x AS xx, :y AS yy"))
+(sqlite-step ?*stmt-n*)
+(sqlite-column-name ?*stmt-n* 1) ; yy
+```
+
+### `(sqlite-column-type <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `SYMBOL` or `BOOLEAN`
+
+Returns the type of column at index
 
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<COLUMN-INDEX>` - The index of the column to return the column name from
 
-### `(sqlite-errmsg <DATABASE-POINTER>)` -> `STRING` or `BOOLEAN`
+#### Returns
+
+- `<SYMBOL>` - The type of the column. Possible values:
+  - `SQLITE_INTEGER`
+  - `SQLITE_FLOAT`
+  - `SQLITE_TEXT`
+  - `SQLITE_BLOB`
+  - `SQLITE_NULL`
+- `<BOOLEAN>` - `FALSE` if something goes wrong or the column does not have a type
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-step ?*stmt-o*)
+(sqlite-column-type ?*stmt-o* 0) ; SQLITE_TEXT
+(sqlite-column-type ?*stmt-o* 1) ; SQLITE_INTEGER
+(sqlite-column-type ?*stmt-o* 2) ; SQLITE_FLOAT
+```
+
+### `(sqlite-column <STATEMENT-POINTER> <COLUMN-INDEX>)` -> `STRING`, `INTEGER`, `DOUBLE`, `nil`, or `BOOLEAN`
+
+Returns the value of column at column index
+
+#### Arguments
+
+- `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<COLUMN-INDEX>` - The index of the column to return the column name from
+
+#### Returns
+
+- `<STRING>` - `SQLITE_TEXT` or `SQLITE_BLOB`
+- `<INTEGER>` - `SQLITE_INTEGER`
+- `<DOUBLE>` - `SQLITE_FLOAT`
+- `nil` - `SQLITE_NULL`
+- `<BOOLEAN>` - `FALSE` if type is not recognized
+
+#### Example
+
+```clips
+(defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
+(sqlite-step ?*stmt-m4*)
+(sqlite-column ?*stmt-m4* 1) ; "Foo baz"
+```
+
+### `(sqlite-errmsg <DB-POINTER>)` -> `STRING` or `BOOLEAN`
+
+Returns the latest error that occurred in the database.
+
+#### Arguments
+
+- `<DB-POINTER>`: Pointer to an opened database connection
+
+#### Returns
+
+- `<STRING>` - A message describing the last error that occurred
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-o* = (sqlite-prepare ?*db* "SELECT ?1, ?2, ?3"))
+(sqlite-close ?*db*)
+(sqlite-errmsg ?*db*) ; "unable to close due to unfinalized statements or unfinished backups"
+```
+
 ### `(sqlite-busy-timeout <STATEMENT-POINTER> <MILLISECONDS>)` -> `BOOLEAN`
 
+Sets the amount of time to wait for a busy query
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<MILLISECONDS>` - An `<INTEGER>` to set the number of milliseconds to wait
+
+#### Returns
+
+- `<BOOLEAN>` - `TRUE` on success or `FALSE` on failure
+
+#### Example
+
+```clips
+(sqlite-busy-timeout ?*db* 0)
+```
 
 ### `(sqlite-limit <STATEMENT-POINTER> <LIMIT> [<AMOUNT>])` -> `INTEGER` or `BOOLEAN`
 
+Get or Set a SQLite limit.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<LIMIT>` - An `<INTEGER>` or `<SYMBOL>` of a limit that may be set.
+  You may set `<INTEGER>` value 0 through 11.
+  Possible `<SYMBOL>` values:
+  - `SQLITE_LIMIT_LENGTH`
+  - `SQLITE_LIMIT_SQL_LENGTH`
+  - `SQLITE_LIMIT_COLUMN`
+  - `SQLITE_LIMIT_EXPR_DEPTH`
+  - `SQLITE_LIMIT_COMPOUND_SELECT`
+  - `SQLITE_LIMIT_VDBE_OP`
+  - `SQLITE_LIMIT_FUNCTION_ARG`
+  - `SQLITE_LIMIT_ATTACHED`
+  - `SQLITE_LIMIT_LIKE_PATTERN_LENGTH`
+  - `SQLITE_LIMIT_VARIABLE_NUMBER`
+  - `SQLITE_LIMIT_TRIGGER_DEPTH`
+  - `SQLITE_LIMIT_WORKER_THREADS`
+- `<AMOUNT>` - An `<INTEGER>` to set to the limit
+
+#### Returns
+
+- `<INTEGER>` - The previous limit before running this command
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(sqlite-limit ?*db* 0) ; 1000000000
+(sqlite-limit ?*db* SQLITE_LIMIT_LENGTH) ; 1000000000
+(sqlite-limit ?*db* 0 999999999) ; 1000000000
+(sqlite-limit ?*db* 0) ; 999999999
+```
 
 ### `(sqlite-sleep <MILLISECONDS>)` -> `INTEGER` or `BOOLEAN`
 
@@ -779,28 +977,80 @@ Initializes database backup from a source to destination database.
 
 ### `(sqlite-backup-step <BACKUP-POINTER> <PAGES>)` -> `SYMBOL`, `INTEGER`, or `BOOLEAN`
 
+Executes a "page" of backup
+
 #### Arguments
 
 - `<BACKUP-POINTER>` - A pointer to an initialized backup.
+- `<PAGES>` - A number of pages to backup. A negative number means all remaining pages
+
+#### Returns
+
+- `<SYMBOL>` - The status after running a step of the backup
+- `<INTEGER>` - Some other return code
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(sqlite-backup-step ?*backup* -1) ; SQLITE_DONE
+```
 
 ### `(sqlite-backup-pagecount <BACKUP-POINTER>)` -> `INTEGER` or `BOOLEAN`
 
+Returns how many pages total are in the backup
+
 #### Arguments
 
 - `<BACKUP-POINTER>` - A pointer to an initialized backup.
+
+#### Returns
+
+- `<INTEGER>` - The number of pages total in the backup
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(sqlite-backup-pagecount ?*backup*) ; 1
+```
 
 ### `(sqlite-backup-remaining <BACKUP-POINTER>)` -> `INTEGER` or `BOOLEAN`
 
+Returns how many pages of backing up are left before the backup is complete
+
 #### Arguments
 
 - `<BACKUP-POINTER>` - A pointer to an initialized backup.
+
+#### Returns
+
+- `<INTEGER>` - The number of pages remaining in the backup
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(sqlite-backup-remaining ?*backup*) ; 1
+```
 
 ### `(sqlite-backup-finish <BACKUP-POINTER>)` -> `BOOLEAN`
 
+Cleans up the backup once finished.
+
 #### Arguments
 
 - `<BACKUP-POINTER>` - A pointer to an initialized backup.
 
+#### Returns
+
+- `<BOOLEAN>` - `TRUE` on success, `FALSE` on failure
+
+#### Example
+
+```clips
+(sqlite-backup-finish ?*backup*) ; TRUE
+```
 
 ## Development
 
