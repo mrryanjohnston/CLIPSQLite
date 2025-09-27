@@ -642,9 +642,39 @@ void SqliteStmtIsexplainFunction(Environment *theEnv, UDFContext *context, UDFVa
 	}
 }
 
+static int bind_one_CV(sqlite3_stmt *stmt, int idx, Environment *theEnv, CLIPSValue *v)
+{
+	if (v->header->type == SYMBOL_TYPE && v->lexemeValue == CreateSymbol(theEnv, "nil"))
+		return sqlite3_bind_null(stmt, idx);
+
+	switch (v->header->type)
+	{
+		case INTEGER_TYPE:
+			return sqlite3_bind_int64(stmt, idx, v->integerValue->contents);
+
+		case FLOAT_TYPE:
+			return sqlite3_bind_double(stmt, idx, v->floatValue->contents);
+
+		case STRING_TYPE:
+		case SYMBOL_TYPE:
+		case INSTANCE_NAME_TYPE:
+			return sqlite3_bind_text(stmt, idx, v->lexemeValue->contents, -1, SQLITE_TRANSIENT);
+
+		case EXTERNAL_ADDRESS_TYPE:
+			/* Unsupported here; bind NULL (or change to blob if you carry a size separately). */
+			return sqlite3_bind_null(stmt, idx);
+
+		case FACT_ADDRESS_TYPE:
+		case INSTANCE_ADDRESS_TYPE:
+		case MULTIFIELD_TYPE:
+		default:
+			/* Unsupported scalar types for a single bind -> NULL */
+			return sqlite3_bind_null(stmt, idx);
+	}
+}
+
 static int bind_one(sqlite3_stmt *stmt, int idx, Environment *theEnv, UDFValue *v)
 {
-	/* NULL via symbol nil */
 	if (v->header->type == SYMBOL_TYPE && v->lexemeValue == CreateSymbol(theEnv, "nil"))
 		return sqlite3_bind_null(stmt, idx);
 
@@ -680,6 +710,8 @@ void SqliteBindFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 	sqlite3_stmt *stmt = NULL;
 	sqlite3 *db = NULL;
 	int argc = UDFArgumentCount(context);
+	int inherit;
+	Defclass *d;
 
 	UDFNextArgument(context, EXTERNAL_ADDRESS_BIT, &a1);
 	if (a1.header->type != EXTERNAL_ADDRESS_TYPE)
@@ -697,13 +729,13 @@ void SqliteBindFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 	}
 	db = sqlite3_db_handle(stmt);
 
-	if (argc == 2)
+	UDFNextArgument(context, ANY_TYPE_BITS, &a2);
+	size_t n;
+	CLIPSValue cv, out;
+	switch (a2.header->type)
 	{
-		UDFNextArgument(context, ANY_TYPE_BITS, &a2);
-
-		if (a2.header->type == MULTIFIELD_TYPE)
-		{
-			size_t n = a2.multifieldValue->length;
+		case MULTIFIELD_TYPE:
+			n = a2.multifieldValue->length;
 			for (size_t i = 0; i < n; ++i)
 			{
 				UDFValue fv;
@@ -719,9 +751,215 @@ void SqliteBindFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 					return;
 				}
 			}
-		}
-		else
-		{
+			break;
+		case FACT_ADDRESS_TYPE:
+			FactSlotNames(a2.factValue, &cv);
+			n = cv.multifieldValue->length;
+			for (size_t i = 0; i < n; ++i)
+			{
+				const char *name;
+				if (cv.multifieldValue->contents[i].header->type != SYMBOL_TYPE)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: The fact's slot name was not a symbol\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+				name = cv.multifieldValue->contents[i].lexemeValue->contents;
+				int idx = sqlite3_bind_parameter_index(stmt, name);
+				if (idx == 0)
+				{
+					continue;
+				}
+				GetFactSlot(a2.factValue, name, &out);
+				int rc = bind_one_CV(stmt, idx, theEnv, &out);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: bind from fact failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			break;
+		case INSTANCE_NAME_TYPE:
+			inherit = true;
+			if (argc == 3)
+			{
+				UDFNextArgument(context, LEXEME_BITS, &a3);
+				if (a3.header->type == SYMBOL_TYPE && a3.lexemeValue == FalseSymbol(theEnv))
+				{
+					inherit = false;
+				}
+			}
+			Instance *in = FindInstance(theEnv, NULL, a2.lexemeValue->contents, true);
+			if (in == NULL)
+			{
+				WriteString(theEnv, STDERR, "sqlite-bind: instance with name ");
+				WriteString(theEnv, STDERR, a2.lexemeValue->contents);
+				WriteString(theEnv, STDERR, " not found\n");
+				returnValue->lexemeValue = FalseSymbol(theEnv);
+				return;
+			}
+			d = InstanceClass(in);
+			ClassSlots(d, &cv, inherit);
+			n = cv.multifieldValue->length;
+			for (size_t i = 0; i < n; ++i)
+			{
+				const char *name;
+				if (cv.multifieldValue->contents[i].header->type != SYMBOL_TYPE)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: The instance's slot name was not a symbol\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+				name = cv.multifieldValue->contents[i].lexemeValue->contents;
+				int idx = sqlite3_bind_parameter_index(stmt, name);
+				if (idx == 0)
+				{
+					continue;
+				}
+				DirectGetSlot(in, name, &out);
+				int rc = bind_one_CV(stmt, idx, theEnv, &out);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: bind from instance failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			break;
+		case INSTANCE_ADDRESS_TYPE:
+			inherit = true;
+			if (argc == 3)
+			{
+				UDFNextArgument(context, LEXEME_BITS, &a3);
+				if (a3.header->type == SYMBOL_TYPE && a3.lexemeValue == FalseSymbol(theEnv))
+				{
+					inherit = false;
+				}
+			}
+			d = InstanceClass(a2.instanceValue);
+			ClassSlots(d, &cv, inherit);
+			n = cv.multifieldValue->length;
+			for (size_t i = 0; i < n; ++i)
+			{
+				const char *name;
+				if (cv.multifieldValue->contents[i].header->type != SYMBOL_TYPE)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: The instance's slot name was not a symbol\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+				name = cv.multifieldValue->contents[i].lexemeValue->contents;
+				int idx = sqlite3_bind_parameter_index(stmt, name);
+				if (idx == 0)
+				{
+					continue;
+				}
+				DirectGetSlot(a2.instanceValue, name, &out);
+				int rc = bind_one_CV(stmt, idx, theEnv, &out);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: bind from instance failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			break;
+		case SYMBOL_TYPE:
+		case STRING_TYPE:
+			if (argc == 2)
+			{
+				int rc = bind_one(stmt, 1, theEnv, &a2);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: bind(1) failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			else
+			if (argc == 3)
+			{
+				UDFNextArgument(context, ANY_TYPE_BITS, &a3);
+				const char *name = a2.lexemeValue->contents;
+				int idx = sqlite3_bind_parameter_index(stmt, name);
+				if (idx == 0)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: unknown named parameter: ");
+					WriteString(theEnv, STDERR, name);
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+
+				int rc = bind_one(stmt, idx, theEnv, &a3);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: named bind failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			else
+			{
+				WriteString(theEnv, STDERR, "sqlite-bind: expected 2 or 3 arguments\n");
+				returnValue->lexemeValue = FalseSymbol(theEnv);
+				return;
+			}
+			break;
+		case INTEGER_TYPE:
+			if (argc == 2)
+			{
+				int rc = bind_one(stmt, 1, theEnv, &a2);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: bind(1) failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			else
+			if (argc == 3)
+			{
+				UDFNextArgument(context, ANY_TYPE_BITS, &a3);
+				int idx = (int) a2.integerValue->contents;
+				if (idx <= 0)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: parameter index must be >= 1\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+
+				int rc = bind_one(stmt, idx, theEnv, &a3);
+				if (rc != SQLITE_OK)
+				{
+					WriteString(theEnv, STDERR, "sqlite-bind: positional bind failed: ");
+					WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+					WriteString(theEnv, STDERR, "\n");
+					returnValue->lexemeValue = FalseSymbol(theEnv);
+					return;
+				}
+			}
+			else
+			{
+				WriteString(theEnv, STDERR, "sqlite-bind: expected 2 or 3 arguments\n");
+				returnValue->lexemeValue = FalseSymbol(theEnv);
+				return;
+			}
+			break;
+		default:
 			int rc = bind_one(stmt, 1, theEnv, &a2);
 			if (rc != SQLITE_OK)
 			{
@@ -731,72 +969,9 @@ void SqliteBindFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 				returnValue->lexemeValue = FalseSymbol(theEnv);
 				return;
 			}
-		}
-
-		returnValue->lexemeValue = TrueSymbol(theEnv);
-		return;
+			break;
 	}
-	else if (argc == 3)
-	{
-		UDFNextArgument(context, (INTEGER_BIT | LEXEME_BITS), &a2);
-		UDFNextArgument(context, ANY_TYPE_BITS, &a3);
-
-		if (a2.header->type == INTEGER_TYPE)
-		{
-			int idx = (int) a2.integerValue->contents;
-			if (idx <= 0)
-			{
-				WriteString(theEnv, STDERR, "sqlite-bind: parameter index must be >= 1\n");
-				returnValue->lexemeValue = FalseSymbol(theEnv);
-				return;
-			}
-
-			int rc = bind_one(stmt, idx, theEnv, &a3);
-			if (rc != SQLITE_OK)
-			{
-				WriteString(theEnv, STDERR, "sqlite-bind: positional bind failed: ");
-				WriteString(theEnv, STDERR, sqlite3_errmsg(db));
-				WriteString(theEnv, STDERR, "\n");
-				returnValue->lexemeValue = FalseSymbol(theEnv);
-				return;
-			}
-
-			returnValue->lexemeValue = TrueSymbol(theEnv);
-			return;
-		}
-		else
-		{
-			const char *name = a2.lexemeValue->contents;
-			int idx = sqlite3_bind_parameter_index(stmt, name);
-			if (idx == 0)
-			{
-				WriteString(theEnv, STDERR, "sqlite-bind: unknown named parameter: ");
-				WriteString(theEnv, STDERR, name);
-				WriteString(theEnv, STDERR, "\n");
-				returnValue->lexemeValue = FalseSymbol(theEnv);
-				return;
-			}
-
-			int rc = bind_one(stmt, idx, theEnv, &a3);
-			if (rc != SQLITE_OK)
-			{
-				WriteString(theEnv, STDERR, "sqlite-bind: named bind failed: ");
-				WriteString(theEnv, STDERR, sqlite3_errmsg(db));
-				WriteString(theEnv, STDERR, "\n");
-				returnValue->lexemeValue = FalseSymbol(theEnv);
-				return;
-			}
-
-			returnValue->lexemeValue = TrueSymbol(theEnv);
-			return;
-		}
-	}
-	else
-	{
-		WriteString(theEnv, STDERR, "sqlite-bind: expected 2 or 3 arguments\n");
-		returnValue->lexemeValue = FalseSymbol(theEnv);
-		return;
-	}
+	returnValue->lexemeValue = TrueSymbol(theEnv);
 }
 
 void SqliteFinalizeFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)

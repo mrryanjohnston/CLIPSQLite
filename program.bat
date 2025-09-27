@@ -332,7 +332,6 @@
 
 (println)
 
-;; 3) named bind (3 args; 2nd = lexeme like :name/@name/$name)
 (defglobal ?*stmt-n* = (sqlite-prepare ?*db* "SELECT :x AS xx, :y AS yy"))
 (expect
 	:x
@@ -524,15 +523,115 @@
 	(slot id)
 	(slot name))
 
+(deftemplate @row
+	(slot @id)
+	(slot @name))
+
+(deftemplate :row
+	(slot :id)
+	(slot :name))
+
 (expect
 	(assert (row (id 1) (name "Foo baz")))
 	(sqlite-row-to-fact ?*stmt-m4* row)
 	"Expected fact of row")
 
+(defglobal ?*stmt-m5* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=@id AND name LIKE @name"))
+(defglobal ?*stmt-m6* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=:id AND name LIKE :name"))
+
+(expect
+	TRUE
+	(sqlite-bind ?*stmt-m5* (assert (@row (@id 99) (@name "Some Name"))))
+	"Expected to be able to bind variables to a prepared statement via a fact")
+
+(expect
+	"SELECT * FROM foos WHERE id=99 AND name LIKE 'Some Name'"
+	(sqlite-expanded-sql ?*stmt-m5*)
+	"Expected id and LIKE to be replaced by bindings")
+
+(expect
+	TRUE
+	(sqlite-clear-bindings ?*stmt-m5*)
+	"Encountered issue with sqlite-clear-bindings for ?*stmt-m5*")
+
+(expect
+	TRUE
+	(sqlite-bind ?*stmt-m6* (assert (:row (:id 99) (:name "Some Name"))))
+	"Expected to be able to bind variables to a prepared statement via a fact")
+
+(expect
+	"SELECT * FROM foos WHERE id=99 AND name LIKE 'Some Name'"
+	(sqlite-expanded-sql ?*stmt-m6*)
+	"Expected id and LIKE to be replaced by bindings")
+
+(expect
+	TRUE
+	(sqlite-clear-bindings ?*stmt-m6*)
+	"Encountered issue with sqlite-clear-bindings for ?*stmt-m6*")
+
 (defclass ROW
 	(is-a USER)
 	(slot id)
 	(slot _name))
+
+(defclass @ROW
+	(is-a USER)
+	(slot @id)
+	(slot @name))
+
+(defclass :ROW
+	(is-a USER)
+	(slot :id)
+	(slot :name))
+(defglobal ?*ins* = (make-instance of @ROW (@id 99) (@name "Some Name")))
+(expect
+	TRUE
+	(sqlite-bind ?*stmt-m5* ?*ins*)
+	"Expected to be able to bind variables to a prepared statement via an instance")
+
+(expect
+	"SELECT * FROM foos WHERE id=99 AND name LIKE 'Some Name'"
+	(sqlite-expanded-sql ?*stmt-m5*)
+	"Expected id and LIKE to be replaced by bindings from instance in ?*stmt-m5*")
+
+(expect
+	TRUE
+	(sqlite-clear-bindings ?*stmt-m5*)
+	"Encountered issue with sqlite-clear-bindings for ?*stmt-m5*")
+(expect
+	TRUE
+	(sqlite-bind ?*stmt-m5* (instance-address ?*ins*))
+	"Expected to be able to bind variables to a prepared statement via an instance")
+
+(expect
+	"SELECT * FROM foos WHERE id=99 AND name LIKE 'Some Name'"
+	(sqlite-expanded-sql ?*stmt-m5*)
+	"Expected id and LIKE to be replaced by bindings from instance in ?*stmt-m5*")
+
+(defglobal ?*ins* = (make-instance of :ROW (:id 99) (:name "Some Name")))
+(expect
+	TRUE
+	(sqlite-bind ?*stmt-m6* ?*ins*)
+	"Expected to be able to bind variables to a prepared statement via an instance")
+
+(expect
+	"SELECT * FROM foos WHERE id=99 AND name LIKE 'Some Name'"
+	(sqlite-expanded-sql ?*stmt-m6*)
+	"Expected id and LIKE to be replaced by bindings from instance in ?*stmt-m6*")
+
+(expect
+	TRUE
+	(sqlite-clear-bindings ?*stmt-m6*)
+	"Encountered issue with sqlite-clear-bindings for ?*stmt-m6*")
+(expect
+	TRUE
+	(sqlite-bind ?*stmt-m6* (instance-address ?*ins*))
+	"Expected to be able to bind variables to a prepared statement via an instance")
+
+(expect
+	"SELECT * FROM foos WHERE id=99 AND name LIKE 'Some Name'"
+	(sqlite-expanded-sql ?*stmt-m6*)
+	"Expected id and LIKE to be replaced by bindings from instance in ?*stmt-m6*")
 
 (defglobal ?*instance* = (sqlite-row-to-instance ?*stmt-m4* ROW))
 (expect
@@ -563,6 +662,17 @@
 	(is-a USER)
 	(slot id)
 	(slot asdf))
+
+(expect
+	TRUE
+	(sqlite-finalize ?*stmt-m5*)
+	"Expected to be able to finalize ?*stmt-m5*")
+
+(expect
+	TRUE
+	(sqlite-finalize ?*stmt-m6*)
+	"Expected to be able to finalize ?*stmt-m6*")
+
 (defglobal ?*instance* = (sqlite-row-to-instance ?*stmt-m4* ROW2 nil asdf))
 
 (expect

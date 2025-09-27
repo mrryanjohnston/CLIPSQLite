@@ -419,8 +419,8 @@ Binds values in place of variables in a prepared statement.
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
 - `<POSITION-NAME-OR-VALUE>` - If inserting positional values, this could be the first value. In this case, do not include `<VALUE>`.
-  This can also be a multifield of positional values. This can also be an `<INTEGER>` representing the positional parameter
-  to replace. This can also be the named parameter in the prepared statement to replace.
+  This can also be a `<MULTIFIELD>` of positional values. This can also be an `<INTEGER>` representing the positional parameter
+  to replace. This can also be the named parameter in the prepared statement to replace. This can also be a `<FACT>` of `<INSTANCE>` with slots named the same as the named parameters in a prepared statement.
 - `[<VALUE>]` - If argument 2 is the name of the parameter to replace in the prepared statement, this is the value for that parameter.
 
 #### Example
