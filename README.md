@@ -213,9 +213,16 @@ due to the last run query.
 
 ### `(sqlite-total-changes <DB-POINTER>)` -> `INTEGER` or `BOOLEAN`
 
+Returns the total changes made so far on the database connection.
+
 #### Arguments
 
 - `<DB-POINTER>` - A pointer to an opened connection.
+
+#### Returns
+
+- `<INTEGER>` - The number of changes
+- `<BOOLEAN>` - `FALSE` when something goes wrong
 
 #### Example
 
@@ -229,9 +236,21 @@ due to the last run query.
 
 ### `(sqlite-last-insert-rowid <DB-POINTER>)` -> `INTEGER` or `BOOLEAN`
 
+Returns the rowid of the last inserted record.
+The rowid is always available as an undeclared column
+named ROWID, OID, or _ROWID_
+as long as those names are not also used by explicitly declared columns.
+If the table has a column of type INTEGER PRIMARY KEY
+then that column is another alias for the rowid.
+
 #### Arguments
 
 - `<DB-POINTER>` - A pointer to an opened connection.
+
+#### Returns
+
+- `<INTEGER>` - THe last inserted rowid
+- `<BOOLEAN>` - `FALSE` if something goes wrong
 
 #### Example
 
@@ -241,11 +260,14 @@ due to the last run query.
 (println "Last inserted id: " (sqlite-last-insert-rowid ?*db*)) ; Last inserted id: 2
 ```
 
-### `(sqlite-db-name <DB-POINTER> <INDEX>)` -> `INTEGER` or `BOOLEAN`
+### `(sqlite-db-name <DB-POINTER> <INDEX>)` -> `STRING` or `BOOLEAN`
+
+The name of a database at a given index on an open connection.
 
 #### Arguments
 
 - `<DB-POINTER>` - A pointer to an opened connection.
+- `<INDEX>` - An `<INTEGER>` indicating the index of the database who's name to return
 
 #### Returns
 
@@ -347,6 +369,9 @@ Prepares a SQL statement to be executed in database
 
 ### `(sqlite-stmt-explain <STATEMENT-POINTER> <INTEGER>)` -> `BOOLEAN`
 
+Set the explain mode. This will cause the query to include an `EXPLAIN`
+which provides information about the query in the results instead of the results.
+
 #### Arguments
 
 - `<STATEMENT-POINTER>` - A pointer to a prepared statement.
@@ -363,7 +388,8 @@ Prepares a SQL statement to be executed in database
 
 ```clips
 (defglobal ?*stmt-m2* = (sqlite-prepare ?*db* "INSERT INTO foos (name) VALUES ('Foo baz'), ('Baz bat'), ('co cuz')"))
-(sqlite-stmt-explain ?*stmt* 1) ; TRUE
+(sqlite-stmt-explain ?*stmt-m2* 2) ; TRUE
+(sqlite-column ?*stmt-m2* 3) ; "SCAN 3-ROW VALUES CLAUSE"
 ```
 
 ### `(sqlite-stmt-isexplain <STATEMENT-POINTER>)` -> `STRING` or `BOOLEAN`
