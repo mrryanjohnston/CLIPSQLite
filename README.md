@@ -434,6 +434,32 @@ Binds values in place of variables in a prepared statement.
 (defglobal ?*stmt-m4* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=? AND name LIKE ?"))
 (sqlite-bind ?*stmt-m4* 1 1)
 (sqlite-bind ?*stmt-m4* 2 "%oo b%")
+(defglobal ?*stmt-m5* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=@id AND name LIKE @name"))
+(defglobal ?*stmt-m6* = (sqlite-prepare ?*db* "SELECT * FROM foos WHERE id=:id AND name LIKE :name"))
+(deftemplate @row
+	(slot @id)
+	(slot @name))
+(deftemplate :row
+	(slot :id)
+	(slot :name))
+(sqlite-bind ?*stmt-m5* (assert (@row (@id 99) (@name "Some Name")))) ; TRUE
+(sqlite-bind ?*stmt-m6* (assert (:row (:id 99) (:name "Some Name")))) ; TRUE
+(defclass @ROW
+	(is-a USER)
+	(slot @id)
+	(slot @name))
+(defclass :ROW
+	(is-a USER)
+	(slot :id)
+	(slot :name))
+(defglobal ?*ins* = (make-instance of @ROW (@id 101) (@name "Different name")))
+(sqlite-bind ?*stmt-m5* ?*ins*) ; TRUE
+(defglobal ?*ins* = (make-instance of @ROW (@id 123) (@name "A third name")))
+(sqlite-bind ?*stmt-m5* (instance-address ?*ins*)) ; TRUE
+(defglobal ?*ins* = (make-instance of :ROW (:id 101) (:name "Different name")))
+(sqlite-bind ?*stmt-m6* ?*ins*) ; TRUE
+(defglobal ?*ins* = (make-instance of :ROW (:id 123) (:name "A third name")))
+(sqlite-bind ?*stmt-m6* (instance-address ?*ins*)) ; TRUE
 ```
 
 ### `(sqlite-finalize <STATEMENT-POINTER>)` -> `BOOLEAN`
