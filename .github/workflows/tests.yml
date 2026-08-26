@@ -1,0 +1,106 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache the CLIPS archive and the pinned SQLite
+        uses: actions/cache@v6
+        with:
+          path: |
+            clips_core_source_642.tar.gz
+            vendor/sqlite-*
+          key: deps-${{ hashFiles('makefile') }}
+          restore-keys: deps-
+
+      - name: Build
+        run: make
+
+      - name: Report what it built against
+        run: |
+          printf '(println "SQLite " (sqlite-libversion))\n(exit 0)\n' > version.bat
+          ./vendor/clips/clips -f2 version.bat
+
+      - name: Run the test suite
+        run: make test
+
+  valgrind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      - name: Cache the CLIPS archive and the pinned SQLite
+        uses: actions/cache@v6
+        with:
+          path: |
+            clips_core_source_642.tar.gz
+            vendor/sqlite-*
+          key: deps-${{ hashFiles('makefile') }}
+          restore-keys: deps-
+
+      - name: Build
+        run: make
+
+      - name: Run the in-process suite under valgrind
+        run: make test-valgrind
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache the CLIPS archive and the pinned SQLite
+        uses: actions/cache@v6
+        with:
+          path: |
+            clips_core_source_642.tar.gz
+            vendor/sqlite-*
+          key: deps-${{ hashFiles('makefile') }}
+          restore-keys: deps-
+
+      - name: Report coverage of userfunctions.c
+        run: make coverage
+
+  system-sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libsqlite3
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Cache the CLIPS archive
+        uses: actions/cache@v6
+        with:
+          path: clips_core_source_642.tar.gz
+          key: clips-642
+
+      - name: Build against the system library
+        run: make SQLITE_SYSTEM=1
+
+      - name: Report what it built against
+        run: |
+          printf '(println "SQLite " (sqlite-libversion))\n(exit 0)\n' > version.bat
+          ./vendor/clips/clips -f2 version.bat
+
+      - name: Run the test suite
+        run: make SQLITE_SYSTEM=1 test

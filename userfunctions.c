@@ -224,6 +224,12 @@ void SqliteOpenFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 	const char *vfs = NULL;
 
 	UDFNextArgument(context,LEXEME_BITS,&theArg);
+	if (theArg.header->type != SYMBOL_TYPE && theArg.header->type != STRING_TYPE)
+	{
+		WriteString(theEnv, STDERR, "sqlite-open: first arg must be a symbol or a string\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
+	}
 	const char *path = theArg.lexemeValue->contents;
 
 	if(UDFHasNextArgument(context))
@@ -268,6 +274,12 @@ void SqliteOpenFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 	if(UDFHasNextArgument(context))
 	{
 		UDFNextArgument(context,LEXEME_BITS,&theArg);
+		if (theArg.header->type != SYMBOL_TYPE && theArg.header->type != STRING_TYPE)
+		{
+			WriteString(theEnv, STDERR, "sqlite-open: third arg must be a symbol or a string\n");
+			returnValue->lexemeValue = FalseSymbol(theEnv);
+			return;
+		}
 		vfs = theArg.lexemeValue->contents;
 	}
 
@@ -403,6 +415,12 @@ void SqliteDbNameFunction(Environment *theEnv, UDFContext *context, UDFValue *re
 	}
 
 	UDFNextArgument(context,INTEGER_BIT,&theArg);
+	if (theArg.header->type != INTEGER_TYPE)
+	{
+		WriteString(theEnv, STDERR, "sqlite-db-name: second arg must be an integer\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
+	}
 	if (!(name = sqlite3_db_name(db, theArg.integerValue->contents)))
 	{
 		WriteString(theEnv, STDERR, "sqlite-db-name: out of range\n");
@@ -792,7 +810,7 @@ void SqliteBindFunction(Environment *theEnv, UDFContext *context, UDFValue *retu
 					inherit = false;
 				}
 			}
-			Instance *in = FindInstance(theEnv, NULL, a2.lexemeValue->contents, true);
+			Instance *in = FindInstanceBySymbol(theEnv, a2.lexemeValue);
 			if (in == NULL)
 			{
 				WriteString(theEnv, STDERR, "sqlite-bind: instance with name ");
@@ -1669,6 +1687,12 @@ void SqliteBusyTimeoutFunction(Environment *theEnv, UDFContext *context, UDFValu
 	}
 
 	UDFNextArgument(context,INTEGER_BIT,&theArg);
+	if (theArg.header->type != INTEGER_TYPE)
+	{
+		WriteString(theEnv, STDERR, "sqlite-busy-timeout: second arg must be an integer\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
+	}
 	if (SQLITE_OK != sqlite3_busy_timeout(db, theArg.integerValue->contents))
 	{
 		WriteString(theEnv, STDERR, "sqlite-busy-timeout: ");
@@ -1816,7 +1840,10 @@ void SqliteRowToFactFunction(Environment *theEnv, UDFContext *context, UDFValue 
 		switch(FBError(theEnv))
 		{
 			case FBE_NO_ERROR:
-				break;
+				WriteString(theEnv, STDERR, "sqlite-row-to-fact: no Fact was asserted and the FactBuilder reports no error\n");
+				FBDispose(fb);
+				returnValue->lexemeValue = FalseSymbol(theEnv);
+				return;
 			case FBE_NULL_POINTER_ERROR:
 				WriteString(theEnv, STDERR, "sqlite-row-to-fact: no deftemplate associated with FactBuilder\n");
 				FBDispose(fb);
@@ -1957,10 +1984,13 @@ void SqliteRowToInstanceFunction(Environment *theEnv, UDFContext *context, UDFVa
 
 	if (i == NULL)
 	{
-		switch(FBError(theEnv))
+		switch(IBError(theEnv))
 		{
 			case IBE_NO_ERROR:
-				break;
+				WriteString(theEnv, STDERR, "sqlite-row-to-instance: no Instance was made and the InstanceBuilder reports no error\n");
+				IBDispose(ib);
+				returnValue->lexemeValue = FalseSymbol(theEnv);
+				return;
 			case IBE_NULL_POINTER_ERROR:
 				WriteString(theEnv, STDERR, "sqlite-row-to-instance: no deftemplate associated with InstanceBuilder\n");
 				IBDispose(ib);
@@ -2012,9 +2042,21 @@ void SqliteLimitFunction(Environment *theEnv, UDFContext *context, UDFValue *ret
 	}
 
 	UDFNextArgument(context, INTEGER_BIT|LEXEME_BITS, &theArg);
-	if (theArg.header->type == INTEGER_TYPE && theArg.integerValue->contents >= 0 && theArg.integerValue->contents <= 11)
+	if (theArg.header->type == INTEGER_TYPE)
 	{
+		if (theArg.integerValue->contents < 0 || theArg.integerValue->contents > 11)
+		{
+			WriteString(theEnv, STDERR, "sqlite-limit: id must be between 0 and 11\n");
+			returnValue->lexemeValue = FalseSymbol(theEnv);
+			return;
+		}
 		id = theArg.integerValue->contents;
+	}
+	else if (theArg.header->type != SYMBOL_TYPE && theArg.header->type != STRING_TYPE)
+	{
+		WriteString(theEnv, STDERR, "sqlite-limit: second arg must be an integer, a symbol, or a string\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
 	}
 	else if (0 == strcmp(theArg.lexemeValue->contents, "SQLITE_LIMIT_LENGTH"))
 	{
@@ -2066,7 +2108,7 @@ void SqliteLimitFunction(Environment *theEnv, UDFContext *context, UDFValue *ret
 	}
 	else
 	{
-		WriteString(theEnv, STDERR, "sqlite-limit: Unknown id");
+		WriteString(theEnv, STDERR, "sqlite-limit: unknown id ");
 		WriteString(theEnv, STDERR, theArg.lexemeValue->contents);
 		WriteString(theEnv, STDERR, "\n");
 		returnValue->lexemeValue = FalseSymbol(theEnv);
@@ -2076,6 +2118,12 @@ void SqliteLimitFunction(Environment *theEnv, UDFContext *context, UDFValue *ret
 	if (UDFHasNextArgument(context))
 	{
 		UDFNextArgument(context, INTEGER_BIT, &theArg);
+		if (theArg.header->type != INTEGER_TYPE)
+		{
+			WriteString(theEnv, STDERR, "sqlite-limit: third arg must be an integer\n");
+			returnValue->lexemeValue = FalseSymbol(theEnv);
+			return;
+		}
 		newVal = theArg.integerValue->contents;
 	}
 
@@ -2186,6 +2234,12 @@ void SqliteBackupStepFunction(Environment *theEnv, UDFContext *context, UDFValue
 	}
 
 	UDFNextArgument(context,INTEGER_BIT,&theArg);
+	if (theArg.header->type != INTEGER_TYPE)
+	{
+		WriteString(theEnv, STDERR, "sqlite-backup-step: second arg must be an integer\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return;
+	}
 
 	rc = sqlite3_backup_step(backup, theArg.integerValue->contents);
 	switch(rc)

@@ -1,3 +1,5 @@
 *.swp
 *.tar.gz
 vendor/
+coverage/
+tests/tmp/

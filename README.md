@@ -6,19 +6,16 @@ A SQLite library for CLIPS
 
 ## Installation
 
-First, you will need `sqlite3.h` to be available in your system.
-If you're on Ubuntu-based systems, for example:
-
-```
-sudo apt install libsqlite3-dev
-```
-
 To compile and run CLIPSQLite locally (without installing globally):
 
 ```
 make
 ./vendor/clips/clips
 ```
+
+`make` fetches the SQLite **3.53.4** amalgamation
+from sqlite.org, checks it against the SHA3-256 that sqlite.org publishes for
+it, and compiles it into the binary.
 
 You could install this globally on your system, too:
 
@@ -28,11 +25,67 @@ sudo make install
 CLIPSQLite
 ```
 
-You can find examples of usage in the `program.bat` file:
+The test suite under `tests/` exercises all of the functions in [API](#API)
+against a real database:
 
 ```
-./vendor/clips/clips -f2 program.bat
+make test
 ```
+
+See [Tests](#tests) for what that runs and how to run only part of it.
+
+### Building against a different SQLite
+
+To link the SQLite your system already provides, rather than the pinned one:
+
+```
+make SQLITE_SYSTEM=1
+```
+
+You will need the development headers (`sudo apt install libsqlite3-dev`
+on Ubuntu-based systems).
+
+To build against an amalgamation you supply yourself, put `sqlite3.c` and
+`sqlite3.h` in a directory and point at it:
+
+```
+make SQLITE_DIR=/path/to/amalgamation
+```
+
+To pin a different release, or to change what the amalgamation is compiled
+with:
+
+```
+make SQLITE_VERSION=3.53.4 SQLITE_YEAR=2026 SQLITE_SHA3=<sha3-256 from sqlite.org>
+make SQLITE_OPTS="$(make -s print-sqlite-opts) -DSQLITE_ENABLE_NORMALIZE=1"
+```
+
+That second one is also what brings the `sqlite-normalized-sql` wrapper into
+the build; it is compiled out otherwise. Changing `SQLITE_OPTS` rebuilds the
+amalgamation rather than reusing the object already on disk.
+
+`make help` lists every target and variable.
+
+## Tests
+
+```
+make test
+```
+
+That builds the binary if it is not already built and runs `tests/run.sh`,
+which has two halves.
+
+Other targets:
+
+| | |
+|---|---|
+| `make test-suite` | only the in-process suite |
+| `make test-valgrind` | the in-process suite under valgrind |
+| `make coverage` | line coverage of `userfunctions.c`, per wrapper |
+| `make help` | every target with a one-line summary |
+
+`CLIPS=/path/to/clips make test` runs the suite against a binary somewhere
+else; `tests/run.sh` reads the same variable.
 
 ## API
 
