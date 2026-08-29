@@ -13,9 +13,12 @@ make
 ./vendor/clips/clips
 ```
 
-`make` fetches the SQLite **3.53.4** amalgamation
-from sqlite.org, checks it against the SHA3-256 that sqlite.org publishes for
-it, and compiles it into the binary.
+`make` fetches CLIPS **6.4.2** and the SQLite **3.53.4** amalgamation
+from sqlite.org, checks the amalgamation against the SHA3-256 that sqlite.org
+publishes for it, and compiles both into the binary.
+
+CLIPSQLite also builds against the two development branches of CLIPS; see
+[Building against a different CLIPS](#building-against-a-different-clips).
 
 You could install this globally on your system, too:
 
@@ -32,9 +35,62 @@ against a real database:
 make test
 ```
 
-See [Tests](#tests) for what that runs and how to run only part of it.
+See [Tests](#tests) for what that runs and how to run only part of it, and
+[Examples](#examples) for the programs it runs alongside the suite.
+
+### Building against a different CLIPS
+
+The wrappers build unchanged against three CLIPS trees, and the suite is run
+against all three:
+
+| `CLIPS_VERSION` | what it is |
+| --- | --- |
+| `6.4.2` | the 6.4.2 release tarball from SourceForge — the default |
+| `svn-6x` | [`branches/64x`](https://sourceforge.net/p/clipsrules/code/HEAD/tree/branches/64x/) of the CLIPS Subversion repository |
+| `svn-7x` | [`branches/70x`](https://sourceforge.net/p/clipsrules/code/HEAD/tree/branches/70x/) — the 7.0 line |
+
+```
+make CLIPS_VERSION=svn-7x
+make CLIPS_VERSION=svn-7x test
+```
+
+Building a branch needs Subversion installed (`sudo apt install subversion`
+on Ubuntu-based systems, `brew install subversion` on macOS). The 6.4.2
+tarball does not.
+
+The branches are pinned to a revision. `make help` prints the revision
+each one is pinned to. To move one, or to take whatever is at the tip:
+
+```
+make CLIPS_VERSION=svn-7x CLIPS_SVN_REV=978
+make CLIPS_VERSION=svn-7x CLIPS_SVN_REV=HEAD
+```
+
+You can specify `CLIPS_SVN_URL` to use a working copy of your own
+or a mirror.
+
+Each version is fetched and built under its own directory.
+`vendor/clips` is a symlink to whichever was built last:
+
+```
+$ make print-clips CLIPS_VERSION=svn-7x
+CLIPS_VERSION svn-7x
+origin        branches/70x at r978
+source        vendor/clips-source/svn-7x-r978
+build         vendor/clips-build/svn-7x-r978
+binary        vendor/clips-build/svn-7x-r978/clips
+fetched       svn https://svn.code.sf.net/p/clipsrules/code/branches/70x/core at r978
+```
+
+To build and test against all three in turn:
+
+```
+make test-all
+```
 
 ### Building against a different SQLite
+
+Version 3.43.0 and greater are supported.
 
 To link the SQLite your system already provides, rather than the pinned one:
 
@@ -62,9 +118,29 @@ make SQLITE_OPTS="$(make -s print-sqlite-opts) -DSQLITE_ENABLE_NORMALIZE=1"
 
 That second one is also what brings the `sqlite-normalized-sql` wrapper into
 the build; it is compiled out otherwise. Changing `SQLITE_OPTS` rebuilds the
-amalgamation rather than reusing the object already on disk.
+amalgamation rather than reusing the object already on disk, and changing
+which SQLite is linked — `SQLITE_SYSTEM`, `SQLITE_DIR`, a different
+`SQLITE_VERSION` — relinks the binary rather than leaving the one built
+against the previous choice in place.
 
 `make help` lists every target and variable.
+
+## Examples
+
+[`examples/`](examples) holds three complete programs, each with a
+`.expected` file that `make test` checks it against:
+
+| | |
+| --- | --- |
+| [1-rules-over-sql.bat](examples/1-rules-over-sql.bat) | Rows become facts, and rules draw the conclusions |
+| [2-prepared-statements.bat](examples/2-prepared-statements.bat) | Placeholders, and why a value out of a fact needs one |
+| [3-backup-to-disk.bat](examples/3-backup-to-disk.bat) | Work done in memory, kept with the online backup API |
+
+Run one from the top of the repository:
+
+```
+./vendor/clips/clips -f2 examples/1-rules-over-sql.bat
+```
 
 ## Tests
 
@@ -75,17 +151,33 @@ make test
 That builds the binary if it is not already built and runs `tests/run.sh`,
 which has two halves.
 
+The first is `tests/test.bat`: every suite under `tests/` batched into one
+CLIPS process, sharing one environment and one assertion counter, and ending
+with a non-zero exit status if any assertion failed.
+
+The second is [`examples/`](examples): every example run to completion and
+checked against the `.expected` file beside it. An example has to exit
+cleanly, write nothing to `STDERR`, and print what that file says it prints.
+So an example that stops working fails the suite rather than sitting in the
+repository misleading someone.
+
 Other targets:
 
 | | |
 |---|---|
+| `make test-all` | the whole thing against all three CLIPS versions |
 | `make test-suite` | only the in-process suite |
+| `make test-examples` | only the examples |
 | `make test-valgrind` | the in-process suite under valgrind |
 | `make coverage` | line coverage of `userfunctions.c`, per wrapper |
 | `make help` | every target with a one-line summary |
 
 `CLIPS=/path/to/clips make test` runs the suite against a binary somewhere
-else; `tests/run.sh` reads the same variable.
+else; `tests/run.sh` reads the same variable. `make test-all` ignores it,
+since the point there is to run each CLIPS version against its own binary.
+
+CI runs the suite and the examples against all three CLIPS versions on every
+push, and the in-process suite under valgrind against all three as well.
 
 ## API
 

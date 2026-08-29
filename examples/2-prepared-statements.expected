@@ -1,0 +1,8 @@
+# See 1-rules-over-sql.expected for what this file is.
+the statement has 3 parameters: :ref :customer :qty
+wrote 3 rows
+sent: SELECT ref, customer, qty FROM shipment WHERE qty >= 10 ORDER BY ref
+  S-1  Kowalski  12
+  S-3  Okonkwo  40
+S-2 belongs to O'Hare & Sons
+S-3 belongs to Okonkwo

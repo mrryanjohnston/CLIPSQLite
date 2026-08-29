@@ -11,70 +11,102 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------------------------------------------------
+  # The suite and the examples, against each CLIPS the wrappers claim to
+  # build against: the 6.4.2 release, and the two Subversion branches at
+  # the revisions the makefile pins.
+  # ---------------------------------------------------------------------
   test:
+    name: test (CLIPS ${{ matrix.clips }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        clips: ['6.4.2', svn-6x, svn-7x]
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache the CLIPS archive and the pinned SQLite
+      - name: Install subversion
+        if: startsWith(matrix.clips, 'svn-')
+        run: sudo apt-get update && sudo apt-get install -y subversion
+
+      - name: Cache the CLIPS and SQLite sources
         uses: actions/cache@v6
         with:
           path: |
             clips_core_source_642.tar.gz
+            vendor/clips-source
             vendor/sqlite-*
-          key: deps-${{ hashFiles('makefile') }}
-          restore-keys: deps-
+          key: deps-${{ matrix.clips }}-${{ hashFiles('makefile') }}
+          restore-keys: deps-${{ matrix.clips }}-
 
       - name: Build
-        run: make
+        run: make CLIPS_VERSION=${{ matrix.clips }}
 
       - name: Report what it built against
         run: |
+          make print-clips CLIPS_VERSION=${{ matrix.clips }}
           printf '(println "SQLite " (sqlite-libversion))\n(exit 0)\n' > version.bat
           ./vendor/clips/clips -f2 version.bat
 
       - name: Run the test suite
-        run: make test
+        run: make CLIPS_VERSION=${{ matrix.clips }} test
 
   valgrind:
+    name: valgrind (CLIPS ${{ matrix.clips }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        clips: ['6.4.2', svn-6x, svn-7x]
     steps:
       - uses: actions/checkout@v7
 
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
 
-      - name: Cache the CLIPS archive and the pinned SQLite
+      - name: Install subversion
+        if: startsWith(matrix.clips, 'svn-')
+        run: sudo apt-get install -y subversion
+
+      - name: Cache the CLIPS and SQLite sources
         uses: actions/cache@v6
         with:
           path: |
             clips_core_source_642.tar.gz
+            vendor/clips-source
             vendor/sqlite-*
-          key: deps-${{ hashFiles('makefile') }}
-          restore-keys: deps-
+          key: deps-${{ matrix.clips }}-${{ hashFiles('makefile') }}
+          restore-keys: deps-${{ matrix.clips }}-
 
       - name: Build
-        run: make
+        run: make CLIPS_VERSION=${{ matrix.clips }}
 
       - name: Run the in-process suite under valgrind
-        run: make test-valgrind
+        run: make CLIPS_VERSION=${{ matrix.clips }} test-valgrind
 
+  # ---------------------------------------------------------------------
+  # Coverage and the system-library link are about userfunctions.c and
+  # about linking rather than about which CLIPS is underneath, so they run
+  # against the default one only.
+  # ---------------------------------------------------------------------
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache the CLIPS archive and the pinned SQLite
+      - name: Cache the CLIPS and SQLite sources
         uses: actions/cache@v6
         with:
           path: |
             clips_core_source_642.tar.gz
+            vendor/clips-source
             vendor/sqlite-*
-          key: deps-${{ hashFiles('makefile') }}
-          restore-keys: deps-
+          key: deps-6.4.2-${{ hashFiles('makefile') }}
+          restore-keys: deps-6.4.2-
 
       - name: Report coverage of userfunctions.c
         run: make coverage
@@ -91,8 +123,11 @@ jobs:
       - name: Cache the CLIPS archive
         uses: actions/cache@v6
         with:
-          path: clips_core_source_642.tar.gz
-          key: clips-642
+          path: |
+            clips_core_source_642.tar.gz
+            vendor/clips-source
+          key: clips-6.4.2-${{ hashFiles('makefile') }}
+          restore-keys: clips-6.4.2-
 
       - name: Build against the system library
         run: make SQLITE_SYSTEM=1

@@ -3,3 +3,4 @@
 vendor/
 coverage/
 tests/tmp/
+examples/tmp/

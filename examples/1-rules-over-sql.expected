@@ -1,0 +1,10 @@
+# Every line here has to appear in what the example printed. A line is
+# matched as a substring, and blank lines and lines starting with # are
+# ignored, so what is pinned is what the example is demonstrating and not
+# the order the agenda happened to fire in.
+loaded 4 parts
+reorder anvil: only 3 left
+reorder washer: only 7 left
+anvil is 35.0kg: too heavy to post
+girder is 80.0kg: too heavy to post
+done

@@ -52,6 +52,11 @@
 #include "sqlite3.h"
 #include <string.h>
 
+/* sqlite3_stmt_explain() arrived in SQLite 3.43.0 */
+#if SQLITE_VERSION_NUMBER < 3043000
+#error "CLIPSQLite requires SQLite 3.43.0 or newer."
+#endif
+
 void UserFunctions(Environment *);
 
 void SqliteLibversionFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)

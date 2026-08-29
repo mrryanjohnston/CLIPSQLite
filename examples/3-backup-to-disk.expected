@@ -1,0 +1,9 @@
+# See 1-rules-over-sql.expected for what this file is. The page count the
+# copy reports is left out: it depends on the page size the build was
+# compiled with.
+loaded 400 readings
+  intake: 200 readings, warmest 13.0, average 12.01
+  boiler: 200 readings, warmest 86.0, average 82.99
+  boiler is running hot
+saved to examples/tmp/readings.db
+the file holds 400 readings
