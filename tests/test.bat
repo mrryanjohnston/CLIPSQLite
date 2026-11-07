@@ -57,6 +57,7 @@
 (batch* tests/bind-test-suite.bat)
 (batch* tests/step-column-test-suite.bat)
 (batch* tests/row-mapping-test-suite.bat)
+(batch* tests/working-memory-test-suite.bat)
 (batch* tests/limit-test-suite.bat)
 (batch* tests/backup-test-suite.bat)
 (batch* tests/handle-lifetime-test-suite.bat)

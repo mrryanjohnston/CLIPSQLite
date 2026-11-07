@@ -1017,15 +1017,21 @@ void SqliteFinalizeFunction(Environment *theEnv, UDFContext *context, UDFValue *
 		return;
 	}
 
-	if ((rc = sqlite3_finalize(stmt)) != SQLITE_OK) {
+	rc = sqlite3_finalize(stmt);
+
+	/* sqlite3_finalize releases the statement whatever it answers: anything
+	   but SQLITE_OK is the error of the statement's most recent step, reported
+	   once more on the way out.  So the handle is emptied either way -- left
+	   as it was, a second finalize would free the statement twice. */
+	theArg.externalAddressValue->contents = NULL;
+
+	if (rc != SQLITE_OK) {
 		WriteString(theEnv, STDERR, "sqlite-finalize: finalize failed: ");
 		WriteString(theEnv, STDERR, sqlite3_errstr(rc));
 		WriteString(theEnv, STDERR, "\n");
 		returnValue->lexemeValue = FalseSymbol(theEnv);
 		return;
 	}
-
-	theArg.externalAddressValue->contents = NULL;
 
 	returnValue->lexemeValue = TrueSymbol(theEnv);
 }
@@ -2024,6 +2030,671 @@ void SqliteRowToInstanceFunction(Environment *theEnv, UDFContext *context, UDFVa
 	IBDispose(ib);
 }
 
+/* ====================================================================== */
+/* A whole statement, or a whole query, into working memory at once.      */
+/*                                                                        */
+/* sqlite-row-to-fact and its siblings map the row under the cursor and   */
+/* leave the stepping to the caller.  The six wrappers below do the loop: */
+/* they walk every row a statement has left to give, and answer one       */
+/* multifield of what they made -- fact addresses, instance addresses, or */
+/* the values themselves laid end to end.  The query-taking half prepares */
+/* the SQL, walks it, and finalizes it before returning.                  */
+/* ====================================================================== */
+
+static const char *SqliteWMNoun(unsigned short kind)
+{
+	return (FACT_ADDRESS_TYPE == kind) ? "deftemplate" : "defclass";
+}
+
+/* The instance names a caller asked for, in row order. */
+typedef struct {
+	CLIPSLexeme **items;   /* NULL when none were given */
+	size_t count;
+} SqliteInstanceNames;
+
+/* The name for one row, or NULL to let CLIPS name it. */
+static const char *SqliteInstanceNameForRow(const SqliteInstanceNames *names, size_t row)
+{
+	if (NULL == names || row >= names->count) return NULL;
+	return names->items[row]->contents;
+}
+
+static void SqliteFreeInstanceNames(Environment *theEnv, SqliteInstanceNames *names)
+{
+	if (NULL == names->items) return;
+	genfree(theEnv, names->items, names->count * sizeof(CLIPSLexeme *));
+	names->items = NULL;
+	names->count = 0;
+}
+
+static bool SqliteIsInstanceNameLexeme(unsigned short type)
+{
+	return SYMBOL_TYPE == type || STRING_TYPE == type || INSTANCE_NAME_TYPE == type;
+}
+
+/* Reads the optional instance-name argument the two instance forms take: one
+   lexeme names the first row, a multifield names the rows it has entries for. */
+static bool SqliteWMNamesFromValue(Environment *theEnv, const char *fn,
+                                   UDFValue *theArg,
+                                   SqliteInstanceNames *names,
+                                   UDFValue *returnValue)
+{
+	Multifield *mf;
+	size_t i;
+
+	if (MULTIFIELD_TYPE != theArg->header->type)
+	{
+		if (!SqliteIsInstanceNameLexeme(theArg->header->type))
+		{
+			WriteString(theEnv, STDERR, fn);
+			WriteString(theEnv, STDERR, ": the instance names must be a multifield, or one symbol, string or instance name\n");
+			returnValue->lexemeValue = FalseSymbol(theEnv);
+			return false;
+		}
+
+		names->items = (CLIPSLexeme **)genalloc(theEnv, sizeof(CLIPSLexeme *));
+		names->items[0] = theArg->lexemeValue;
+		names->count = 1;
+		return true;
+	}
+
+	/* begin and range rather than the whole multifield: a $?rest bound on a
+	   rule's LHS arrives as a window onto a longer one, and reading it from
+	   field zero would name the rows after values the caller never passed. */
+	mf = theArg->multifieldValue;
+	if (0 == theArg->range) return true;   /* an empty list names nothing */
+
+	names->items = (CLIPSLexeme **)genalloc(theEnv, theArg->range * sizeof(CLIPSLexeme *));
+	names->count = theArg->range;
+
+	for (i = 0; i < names->count; i++)
+	{
+		CLIPSValue *field = &mf->contents[theArg->begin + i];
+
+		if (!SqliteIsInstanceNameLexeme(field->header->type))
+		{
+			WriteString(theEnv, STDERR, fn);
+			WriteString(theEnv, STDERR, ": field ");
+			WriteInteger(theEnv, STDERR, (long long)(i + 1));
+			WriteString(theEnv, STDERR, " of the instance names is not a symbol, string or instance name\n");
+			returnValue->lexemeValue = FalseSymbol(theEnv);
+			SqliteFreeInstanceNames(theEnv, names);
+			return false;
+		}
+		names->items[i] = field->lexemeValue;
+	}
+	return true;
+}
+
+/* Uppercases in place, ASCII only. */
+static void SqliteUpcaseASCII(char *s)
+{
+	for (; '\0' != *s; s++)
+	{
+		if (*s >= 'a' && *s <= 'z') { *s = (char)(*s - 'a' + 'A'); }
+	}
+}
+
+/* One cell of the current row as a CLIPS value: the same mapping
+   sqlite-column uses, with a BLOB read as text so that the buffer SQLite
+   hands back is one it has zero-terminated. */
+static void SqliteColumnToCLIPSValue(Environment *theEnv, sqlite3_stmt *stmt,
+                                     int col, CLIPSValue *cv)
+{
+	const unsigned char *text;
+
+	switch (sqlite3_column_type(stmt, col))
+	{
+		case SQLITE_INTEGER:
+			cv->integerValue = CreateInteger(theEnv, (long long)sqlite3_column_int64(stmt, col));
+			break;
+		case SQLITE_FLOAT:
+			cv->floatValue = CreateFloat(theEnv, sqlite3_column_double(stmt, col));
+			break;
+		case SQLITE_TEXT:
+		case SQLITE_BLOB:
+			text = sqlite3_column_text(stmt, col);
+			cv->lexemeValue = CreateString(theEnv, (NULL != text) ? (const char *)text : "");
+			break;
+		default:
+			cv->lexemeValue = CreateSymbol(theEnv, "nil");
+			break;
+	}
+}
+
+/* The deftemplate or defclass name when the query-taking forms are not given
+   one: the one table the result's columns come from.  Returns a string the
+   caller frees, or NULL after saying why not. */
+static char *SqliteInferConstructName(Environment *theEnv, const char *fn,
+                                      sqlite3_stmt *stmt, unsigned short kind)
+{
+	int col_count = sqlite3_column_count(stmt);
+	const char *found = NULL;
+	char *copy;
+	size_t len;
+	int col;
+
+	for (col = 0; col < col_count; col++)
+	{
+		const char *tn = sqlite3_column_table_name(stmt, col);
+
+		if (NULL == tn) continue;   /* an expression, not a column of a table */
+		if (NULL == found) { found = tn; continue; }
+		if (0 != strcmp(found, tn))
+		{
+			WriteString(theEnv, STDERR, fn);
+			WriteString(theEnv, STDERR, ": the query reads more than one table, so there is no single name to infer; name the ");
+			WriteString(theEnv, STDERR, SqliteWMNoun(kind));
+			WriteString(theEnv, STDERR, "\n");
+			return NULL;
+		}
+	}
+
+	if (NULL == found)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": no column of the query comes from a table, so there is no ");
+		WriteString(theEnv, STDERR, SqliteWMNoun(kind));
+		WriteString(theEnv, STDERR, " name to infer; name one\n");
+		return NULL;
+	}
+
+	len = strlen(found);
+	copy = (char *)genalloc(theEnv, len + 1);
+	memcpy(copy, found, len + 1);
+	if (INSTANCE_ADDRESS_TYPE == kind) { SqliteUpcaseASCII(copy); }
+	return copy;
+}
+
+/* Says once that a row made nothing. */
+static void SqliteWMReportRowLost(Environment *theEnv, const char *fn,
+                                  const char *what, const char *name,
+                                  bool *reported)
+{
+	if (*reported) return;
+	*reported = true;
+
+	WriteString(theEnv, STDERR, fn);
+	WriteString(theEnv, STDERR, ": ");
+	WriteString(theEnv, STDERR, what);
+	WriteString(theEnv, STDERR, " ");
+	WriteString(theEnv, STDERR, name);
+	WriteString(theEnv, STDERR, " could be made for a row; those rows are skipped\n");
+}
+
+/* Walks the rows a statement has left, making one fact or instance per row,
+   or appending every row to one multifield, and answers what it made in row
+   order.  The row under the cursor, if the statement is sitting on one, is
+   the first; then the statement is stepped until it is done, and reset. */
+static void SqliteStmtToWorkingMemory(Environment *theEnv, const char *fn,
+                                      sqlite3_stmt *stmt,
+                                      unsigned short kind, const char *name,
+                                      const SqliteInstanceNames *names,
+                                      bool headers, UDFValue *returnValue)
+{
+	int col_count = sqlite3_column_count(stmt);
+	Deftemplate *tmpl = NULL;
+	Defclass *cls = NULL;
+	FactBuilder *fb = NULL;
+	InstanceBuilder *ib = NULL;
+	MultifieldBuilder *mb;
+	const char **slot_names;   /* per column: the slot it fills, or NULL to skip it */
+	bool reported = false;
+	/* CLIPS reports a build it refused by setting the evaluation error, and
+	   that also halts execution -- after which the next row's slots are
+	   refused too, and one lost row would quietly take the rest of the
+	   statement with it.  The rows are independent, so the flags are put back
+	   to what this call found them as and the row after gets its own attempt.
+	   Only the build can do this; a slot value a constraint refuses does not
+	   halt. */
+	bool haltWas = GetHaltExecution(theEnv);
+	bool errorWas = GetEvaluationError(theEnv);
+	bool have_row;
+	bool finished = false;
+	size_t row = 0;
+	int col;
+
+	returnValue->lexemeValue = FalseSymbol(theEnv);
+
+	if (FACT_ADDRESS_TYPE == kind)
+	{
+		fb = CreateFactBuilder(theEnv, name);
+		switch (FBError(theEnv))
+		{
+			case FBE_NO_ERROR:
+				break;
+			case FBE_DEFTEMPLATE_NOT_FOUND_ERROR:
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": there is no deftemplate named ");
+				WriteString(theEnv, STDERR, name);
+				WriteString(theEnv, STDERR, "\n");
+				FBDispose(fb);
+				return;
+			case FBE_IMPLIED_DEFTEMPLATE_ERROR:
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": ");
+				WriteString(theEnv, STDERR, name);
+				WriteString(theEnv, STDERR, " is the implied deftemplate of an ordered fact, which has no slots to fill\n");
+				FBDispose(fb);
+				return;
+			default:
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": something unexpected happened when creating the FactBuilder\n");
+				FBDispose(fb);
+				return;
+		}
+		tmpl = FindDeftemplate(theEnv, name);
+	}
+	else if (INSTANCE_ADDRESS_TYPE == kind)
+	{
+		ib = CreateInstanceBuilder(theEnv, name);
+		switch (IBError(theEnv))
+		{
+			case IBE_NO_ERROR:
+				break;
+			case IBE_DEFCLASS_NOT_FOUND_ERROR:
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": there is no defclass named ");
+				WriteString(theEnv, STDERR, name);
+				WriteString(theEnv, STDERR, "\n");
+				IBDispose(ib);
+				return;
+			default:
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": something unexpected happened when creating the InstanceBuilder\n");
+				IBDispose(ib);
+				return;
+		}
+		cls = FindDefclass(theEnv, name);
+	}
+
+	/* Which columns land where is decided once, before the first row: a
+	   column the shape has no slot for is skipped.  An instance's name is not
+	   a slot, so under the instance form a column called "name" goes to the
+	   slot "_name", the same as sqlite-row-to-instance does by default. */
+	slot_names = (const char **)genalloc(theEnv, ((size_t)col_count + 1) * sizeof(const char *));
+	for (col = 0; col < col_count; col++)
+	{
+		const char *cn = sqlite3_column_name(stmt, col);
+
+		if (NULL == cn) { cn = ""; }
+		if (NULL != fb)
+		{
+			slot_names[col] = DeftemplateSlotExistP(tmpl, cn) ? cn : NULL;
+		}
+		else if (NULL != ib)
+		{
+			if (0 == strcmp("name", cn)) { cn = "_name"; }
+			slot_names[col] = SlotExistP(cls, cn, true) ? cn : NULL;
+		}
+		else { slot_names[col] = cn; }
+	}
+
+	mb = CreateMultifieldBuilder(theEnv, 0);
+
+	if (MULTIFIELD_TYPE == kind && headers)
+	{
+		for (col = 0; col < col_count; col++) { MBAppendString(mb, slot_names[col]); }
+	}
+
+	/* sqlite3_data_count answers 0 unless the last step left a row ready */
+	have_row = sqlite3_data_count(stmt) > 0;
+
+	for (;;)
+	{
+		bool row_ok = true;
+
+		if (!have_row)
+		{
+			int rc = sqlite3_step(stmt);
+
+			if (SQLITE_DONE == rc) { finished = true; break; }
+			if (SQLITE_ROW != rc)
+			{
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": the statement failed while it was being stepped: ");
+				WriteString(theEnv, STDERR, sqlite3_errmsg(sqlite3_db_handle(stmt)));
+				WriteString(theEnv, STDERR, "\n");
+				break;
+			}
+		}
+		have_row = false;
+
+		for (col = 0; col < col_count; col++)
+		{
+			CLIPSValue cv;
+			PutSlotError pse;
+
+			if (NULL == slot_names[col]) continue;
+
+			SqliteColumnToCLIPSValue(theEnv, stmt, col, &cv);
+
+			if (NULL == fb && NULL == ib)
+			{
+				MBAppend(mb, &cv);
+				continue;
+			}
+
+			pse = (NULL != fb) ? FBPutSlot(fb, slot_names[col], &cv)
+			                   : IBPutSlot(ib, slot_names[col], &cv);
+			if (PSE_NO_ERROR == pse) continue;
+
+			row_ok = false;
+			if (!reported)
+			{
+				reported = true;
+				WriteString(theEnv, STDERR, fn);
+				WriteString(theEnv, STDERR, ": slot ");
+				WriteString(theEnv, STDERR, slot_names[col]);
+				WriteString(theEnv, STDERR, " of ");
+				WriteString(theEnv, STDERR, name);
+				WriteString(theEnv, STDERR, " would not take the value in column ");
+				WriteInteger(theEnv, STDERR, (long long)col);
+				WriteString(theEnv, STDERR, "; those rows are skipped\n");
+			}
+			break;
+		}
+
+		if (NULL != fb)
+		{
+			Fact *f;
+
+			if (!row_ok) { FBAbort(fb); }
+			else if (NULL != (f = FBAssert(fb))) { MBAppendFact(mb, f); }
+			else
+			{
+				SqliteWMReportRowLost(theEnv, fn, "no fact of", name, &reported);
+				SetEvaluationError(theEnv, errorWas);
+				SetHaltExecution(theEnv, haltWas);
+			}
+		}
+		else if (NULL != ib)
+		{
+			Instance *i;
+
+			if (!row_ok) { IBAbort(ib); }
+			else if (NULL != (i = IBMake(ib, SqliteInstanceNameForRow(names, row))))
+			{
+				MBAppendInstance(mb, i);
+			}
+			else
+			{
+				IBAbort(ib);
+				SqliteWMReportRowLost(theEnv, fn, "no instance of", name, &reported);
+				SetEvaluationError(theEnv, errorWas);
+				SetHaltExecution(theEnv, haltWas);
+			}
+		}
+
+		row++;
+	}
+
+	/* A statement stepped to SQLITE_DONE refuses a new binding until it is
+	   reset, so a walk that reached the end leaves the statement reset: ready
+	   to be bound and run again, and holding no lock on the database.  One
+	   that stopped on an error is left as it is, so sqlite-reset can report
+	   what went wrong. */
+	if (finished) { sqlite3_reset(stmt); }
+
+	if (NULL != fb) { FBDispose(fb); }
+	if (NULL != ib) { IBDispose(ib); }
+	genfree(theEnv, slot_names, ((size_t)col_count + 1) * sizeof(const char *));
+
+	returnValue->multifieldValue = MBCreate(mb);
+	MBDispose(mb);
+}
+
+/* Reads the optional headers flag the two multifield forms take */
+static bool SqliteWMReadHeaderFlag(Environment *theEnv, UDFContext *context,
+                                   const char *fn, bool *headers,
+                                   UDFValue *returnValue)
+{
+	UDFValue theArg;
+
+	if (!UDFHasNextArgument(context)) return true;
+
+	UDFNextArgument(context, SYMBOL_BIT, &theArg);
+	if (theArg.header->type != SYMBOL_TYPE
+	    || (theArg.lexemeValue != TrueSymbol(theEnv)
+	        && theArg.lexemeValue != FalseSymbol(theEnv)))
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": the headers argument must be TRUE or FALSE\n");
+		returnValue->lexemeValue = FalseSymbol(theEnv);
+		return false;
+	}
+
+	*headers = (theArg.lexemeValue == TrueSymbol(theEnv));
+	return true;
+}
+
+static void SqliteStmtToWMUDF(Environment *theEnv, UDFContext *context,
+                              UDFValue *returnValue, const char *fn,
+                              unsigned short kind)
+{
+	UDFValue theArg;
+	sqlite3_stmt *stmt;
+	SqliteInstanceNames names = { NULL, 0 };
+	const char *construct;
+
+	returnValue->lexemeValue = FalseSymbol(theEnv);
+
+	UDFNextArgument(context, EXTERNAL_ADDRESS_BIT, &theArg);
+	if (theArg.header->type != EXTERNAL_ADDRESS_TYPE)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": first arg must be a statement pointer\n");
+		return;
+	}
+
+	if (!(stmt = (sqlite3_stmt *) theArg.externalAddressValue->contents))
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": statement pointer is NULL\n");
+		return;
+	}
+
+	if (MULTIFIELD_TYPE == kind)
+	{
+		bool headers = false;
+
+		if (!SqliteWMReadHeaderFlag(theEnv, context, fn, &headers, returnValue)) return;
+		SqliteStmtToWorkingMemory(theEnv, fn, stmt, kind, NULL, NULL, headers, returnValue);
+		return;
+	}
+
+	UDFNextArgument(context, LEXEME_BITS, &theArg);
+	if (theArg.header->type != STRING_TYPE && theArg.header->type != SYMBOL_TYPE)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": second arg must be the name of the ");
+		WriteString(theEnv, STDERR, SqliteWMNoun(kind));
+		WriteString(theEnv, STDERR, "\n");
+		return;
+	}
+	construct = theArg.lexemeValue->contents;
+
+	if (INSTANCE_ADDRESS_TYPE == kind && UDFHasNextArgument(context))
+	{
+		UDFValue nameArg;
+
+		UDFNextArgument(context, MULTIFIELD_BIT | LEXEME_BITS | INSTANCE_NAME_BIT, &nameArg);
+		if (!SqliteWMNamesFromValue(theEnv, fn, &nameArg, &names, returnValue)) return;
+	}
+
+	SqliteStmtToWorkingMemory(theEnv, fn, stmt, kind, construct, &names, false, returnValue);
+	SqliteFreeInstanceNames(theEnv, &names);
+}
+
+static void SqliteQueryToWMUDF(Environment *theEnv, UDFContext *context,
+                               UDFValue *returnValue, const char *fn,
+                               unsigned short kind)
+{
+	UDFValue theArg;
+	sqlite3 *db;
+	sqlite3_stmt *stmt = NULL;
+	sqlite3_stmt *rest = NULL;
+	const char *query;
+	const char *tail = NULL;
+	const char *given = NULL;
+	char *inferred = NULL;
+	SqliteInstanceNames names = { NULL, 0 };
+	bool namesGiven = false;
+	bool headers = false;
+	int rc;
+
+	returnValue->lexemeValue = FalseSymbol(theEnv);
+
+	UDFNextArgument(context, EXTERNAL_ADDRESS_BIT, &theArg);
+	if (theArg.header->type != EXTERNAL_ADDRESS_TYPE)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": first arg must be a database pointer\n");
+		return;
+	}
+
+	if (!(db = (sqlite3 *) theArg.externalAddressValue->contents))
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": database pointer is NULL\n");
+		return;
+	}
+
+	UDFNextArgument(context, LEXEME_BITS, &theArg);
+	if (theArg.header->type != STRING_TYPE)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": second arg must be a query string\n");
+		return;
+	}
+	query = theArg.lexemeValue->contents;
+
+	if (MULTIFIELD_TYPE == kind
+	    && !SqliteWMReadHeaderFlag(theEnv, context, fn, &headers, returnValue))
+	{
+		return;
+	}
+
+	if (MULTIFIELD_TYPE != kind && UDFHasNextArgument(context))
+	{
+		UDFNextArgument(context,
+		                (INSTANCE_ADDRESS_TYPE == kind)
+		                  ? (MULTIFIELD_BIT | LEXEME_BITS | INSTANCE_NAME_BIT)
+		                  : LEXEME_BITS,
+		                &theArg);
+
+		if (INSTANCE_ADDRESS_TYPE == kind && MULTIFIELD_TYPE == theArg.header->type)
+		{
+			if (!SqliteWMNamesFromValue(theEnv, fn, &theArg, &names, returnValue)) return;
+			namesGiven = true;
+		}
+		else if (theArg.header->type != STRING_TYPE && theArg.header->type != SYMBOL_TYPE)
+		{
+			WriteString(theEnv, STDERR, fn);
+			WriteString(theEnv, STDERR, ": third arg must be the name of the ");
+			WriteString(theEnv, STDERR, SqliteWMNoun(kind));
+			WriteString(theEnv, STDERR, "\n");
+			return;
+		}
+		else { given = theArg.lexemeValue->contents; }
+	}
+
+	if (INSTANCE_ADDRESS_TYPE == kind && UDFHasNextArgument(context))
+	{
+		UDFValue nameArg;
+
+		if (namesGiven)
+		{
+			WriteString(theEnv, STDERR, fn);
+			WriteString(theEnv, STDERR, ": the instance names were given twice; the multifield third argument is already them\n");
+			SqliteFreeInstanceNames(theEnv, &names);
+			return;
+		}
+
+		UDFNextArgument(context, MULTIFIELD_BIT | LEXEME_BITS | INSTANCE_NAME_BIT, &nameArg);
+		if (!SqliteWMNamesFromValue(theEnv, fn, &nameArg, &names, returnValue)) return;
+	}
+
+	rc = sqlite3_prepare_v2(db, query, -1, &stmt, &tail);
+	if (SQLITE_OK != rc)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": prepare failed: ");
+		WriteString(theEnv, STDERR, sqlite3_errmsg(db));
+		WriteString(theEnv, STDERR, "\n");
+		SqliteFreeInstanceNames(theEnv, &names);
+		return;
+	}
+	if (NULL == stmt)
+	{
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": the query holds no statement\n");
+		SqliteFreeInstanceNames(theEnv, &names);
+		return;
+	}
+
+	/* One statement at a time.  sqlite3_prepare_v2 compiles the first one and
+	   hands back the rest; anything there but whitespace and comments is a
+	   second statement the caller meant to run, and dropping it on the floor
+	   would be worse than refusing. */
+	if (NULL != tail && SQLITE_OK == sqlite3_prepare_v2(db, tail, -1, &rest, NULL) && NULL != rest)
+	{
+		sqlite3_finalize(rest);
+		WriteString(theEnv, STDERR, fn);
+		WriteString(theEnv, STDERR, ": the query holds more than one statement; run them one at a time\n");
+		sqlite3_finalize(stmt);
+		SqliteFreeInstanceNames(theEnv, &names);
+		return;
+	}
+
+	if (MULTIFIELD_TYPE != kind && NULL == given)
+	{
+		if (NULL == (inferred = SqliteInferConstructName(theEnv, fn, stmt, kind)))
+		{
+			sqlite3_finalize(stmt);
+			SqliteFreeInstanceNames(theEnv, &names);
+			return;
+		}
+		given = inferred;
+	}
+
+	SqliteStmtToWorkingMemory(theEnv, fn, stmt, kind, given, &names, headers, returnValue);
+
+	sqlite3_finalize(stmt);
+	if (NULL != inferred) { genfree(theEnv, inferred, strlen(inferred) + 1); }
+	SqliteFreeInstanceNames(theEnv, &names);
+}
+
+void SqliteStmtToFactsFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	SqliteStmtToWMUDF(theEnv, context, returnValue, "sqlite-stmt-to-facts", FACT_ADDRESS_TYPE);
+}
+
+void SqliteStmtToInstancesFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	SqliteStmtToWMUDF(theEnv, context, returnValue, "sqlite-stmt-to-instances", INSTANCE_ADDRESS_TYPE);
+}
+
+void SqliteStmtToMultifieldFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	SqliteStmtToWMUDF(theEnv, context, returnValue, "sqlite-stmt-to-multifield", MULTIFIELD_TYPE);
+}
+
+void SqliteQueryToFactsFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	SqliteQueryToWMUDF(theEnv, context, returnValue, "sqlite-query-to-facts", FACT_ADDRESS_TYPE);
+}
+
+void SqliteQueryToInstancesFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	SqliteQueryToWMUDF(theEnv, context, returnValue, "sqlite-query-to-instances", INSTANCE_ADDRESS_TYPE);
+}
+
+void SqliteQueryToMultifieldFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
+{
+	SqliteQueryToWMUDF(theEnv, context, returnValue, "sqlite-query-to-multifield", MULTIFIELD_TYPE);
+}
+
 void SqliteLimitFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
 {
 	UDFValue theArg;
@@ -2318,6 +2989,7 @@ void SqliteBackupRemainingFunction(Environment *theEnv, UDFContext *context, UDF
 void SqliteBackupFinishFunction(Environment *theEnv, UDFContext *context, UDFValue *returnValue)
 {
 	UDFValue theArg;
+	int rc;
 
 	UDFNextArgument(context,EXTERNAL_ADDRESS_BIT,&theArg);
 	if (theArg.header->type != EXTERNAL_ADDRESS_TYPE)
@@ -2332,16 +3004,23 @@ void SqliteBackupFinishFunction(Environment *theEnv, UDFContext *context, UDFVal
 		returnValue->lexemeValue = FalseSymbol(theEnv);
 		return;
 	}
-	if (sqlite3_backup_finish((sqlite3_backup *)theArg.externalAddressValue->contents) != SQLITE_OK)
+	rc = sqlite3_backup_finish((sqlite3_backup *)theArg.externalAddressValue->contents);
+
+	/* sqlite3_backup_finish releases the backup object whatever it answers:
+	   anything but SQLITE_OK is the error a step left behind, reported once
+	   more on the way out.  So the handle is emptied either way, and the code
+	   is described by name -- the object it belonged to is already gone. */
+	theArg.externalAddressValue->contents = NULL;
+
+	if (rc != SQLITE_OK)
 	{
 		WriteString(theEnv, STDERR, "sqlite-backup-finish: could not finish backup: ");
-		WriteString(theEnv, STDERR, sqlite3_errmsg(theArg.externalAddressValue->contents));
+		WriteString(theEnv, STDERR, sqlite3_errstr(rc));
 		WriteString(theEnv, STDERR, "\n");
 		returnValue->lexemeValue = FalseSymbol(theEnv);
 		return;
 	}
 
-	theArg.externalAddressValue->contents = NULL;
 	returnValue->lexemeValue = TrueSymbol(theEnv);
 }
 
@@ -2399,6 +3078,12 @@ void UserFunctions(
 	AddUDF(env,"sqlite-row-to-multifield","bm",1,1,";e",SqliteRowToMultifieldFunction,"SqliteRowToMultifieldFunction",NULL);
 	AddUDF(env,"sqlite-row-to-fact","bf",2,2,";e;y",SqliteRowToFactFunction,"SqliteRowToFactFunction",NULL);
 	AddUDF(env,"sqlite-row-to-instance","bi",2,4,";e;y;y;y",SqliteRowToInstanceFunction,"SqliteRowToInstanceFunction",NULL);
+	AddUDF(env,"sqlite-stmt-to-facts","bm",2,2,";e;sy",SqliteStmtToFactsFunction,"SqliteStmtToFactsFunction",NULL);
+	AddUDF(env,"sqlite-stmt-to-instances","bm",2,3,";e;sy;mnsy",SqliteStmtToInstancesFunction,"SqliteStmtToInstancesFunction",NULL);
+	AddUDF(env,"sqlite-stmt-to-multifield","bm",1,2,";e;b",SqliteStmtToMultifieldFunction,"SqliteStmtToMultifieldFunction",NULL);
+	AddUDF(env,"sqlite-query-to-facts","bm",2,3,";e;s;sy",SqliteQueryToFactsFunction,"SqliteQueryToFactsFunction",NULL);
+	AddUDF(env,"sqlite-query-to-instances","bm",2,4,";e;s;mnsy;mnsy",SqliteQueryToInstancesFunction,"SqliteQueryToInstancesFunction",NULL);
+	AddUDF(env,"sqlite-query-to-multifield","bm",2,3,";e;s;b",SqliteQueryToMultifieldFunction,"SqliteQueryToMultifieldFunction",NULL);
 	AddUDF(env,"sqlite-column-count","bl",1,1,";e",SqliteColumnCountFunction,"SqliteColumnCountFunction",NULL);
 	AddUDF(env,"sqlite-column-database-name","bs",2,2,";e;l",SqliteColumnDatabaseNameFunction,"SqliteColumnDatabaseNameFunction",NULL);
 	AddUDF(env,"sqlite-column-origin-name","bs",2,2,";e;l",SqliteColumnOriginNameFunction,"SqliteColumnOriginNameFunction",NULL);

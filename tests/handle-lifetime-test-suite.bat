@@ -57,6 +57,18 @@
 (expect "limit refuses it" FALSE ?*hl-r*)
 (bind ?*hl-r* (sqlite-prepare ?*hl-db* "SELECT 1;"))
 (expect "prepare refuses it" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-query-to-facts ?*hl-db* "SELECT 1 AS a;" row-abc))
+(expect "query-to-facts refuses it" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-query-to-instances ?*hl-db* "SELECT 1 AS a;" ROW-ABC))
+(expect "query-to-instances refuses it" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-query-to-multifield ?*hl-db* "SELECT 1 AS a;"))
+(expect "query-to-multifield refuses it" FALSE ?*hl-r*)
+(bind ?*hl-db2* (sqlite-open :memory:))
+(bind ?*hl-r* (sqlite-backup-init ?*hl-db* main ?*hl-db2* main))
+(expect "backup-init refuses it as the destination" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-backup-init ?*hl-db2* main ?*hl-db* main))
+(expect "and as the source" FALSE ?*hl-r*)
+(expect "closing the live connection" TRUE (sqlite-close ?*hl-db2*))
 
 ; ------------------------------------------------------------
 ; a finalized statement
@@ -116,6 +128,12 @@
 (expect "row-to-fact refuses it" FALSE ?*hl-r*)
 (bind ?*hl-r* (sqlite-row-to-instance ?*hl-st* ROW-ABC))
 (expect "row-to-instance refuses it" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-stmt-to-facts ?*hl-st* row-abc))
+(expect "stmt-to-facts refuses it" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-stmt-to-instances ?*hl-st* ROW-ABC))
+(expect "stmt-to-instances refuses it" FALSE ?*hl-r*)
+(bind ?*hl-r* (sqlite-stmt-to-multifield ?*hl-st*))
+(expect "stmt-to-multifield refuses it" FALSE ?*hl-r*)
 
 ; ------------------------------------------------------------
 ; a connection will not close under a live statement

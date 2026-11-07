@@ -277,5 +277,79 @@
         (sqlite-expanded-sql ?*bd-st*))
 (bd-clear)
 
+; ------------------------------------------------------------
+; a slot the statement has no parameter for, from an instance
+;
+; Skipped, as it is from a fact: the class's slot list is walked and a name
+; that matches no parameter is passed over, by address and by name alike.
+; ------------------------------------------------------------
+
+(bind ?*bd-st2* (sqlite-prepare ?*bd-db* "SELECT :a AS a, :c AS c;"))
+(expect "a statement with no :b" TRUE (pointerp ?*bd-st2*))
+(expect "an instance address binds the slots that match" TRUE (sqlite-bind ?*bd-st2* ?*bd-i*))
+(expect "and passes over the one that does not"
+        "SELECT 1 AS a, 3 AS c;" (sqlite-expanded-sql ?*bd-st2*))
+(expect "clearing them" TRUE (sqlite-clear-bindings ?*bd-st2*))
+(expect "an instance name does the same" TRUE (sqlite-bind ?*bd-st2* [bd-sub]))
+(expect "with the same result" "SELECT 1 AS a, 3 AS c;" (sqlite-expanded-sql ?*bd-st2*))
+(expect "finalizing it" TRUE (sqlite-finalize ?*bd-st2*))
+
+; ------------------------------------------------------------
+; slot values that become NULL
+;
+; The same rule as for a bare value: nil is NULL, a float is a real, and
+; what has no SQL equivalent -- a multislot, an external address, a fact
+; address -- is bound as NULL rather than refused.
+; ------------------------------------------------------------
+
+(bind ?*bd-f* (assert (bind-typed (:a nil) (:b 2.5) (:c 1 2))))
+(expect "a fact with a nil, a float and a multislot binds" TRUE (sqlite-bind ?*bd-st* ?*bd-f*))
+(expect "as NULL, a real, and NULL"
+        "SELECT NULL AS a, 2.5 AS b, NULL AS c;" (sqlite-expanded-sql ?*bd-st*))
+(bd-clear)
+
+(bind ?*bd-f* (assert (bind-typed (:a ?*bd-db*) (:b ?*bd-f*))))
+(expect "a fact holding an external address and a fact address binds"
+        TRUE (sqlite-bind ?*bd-st* ?*bd-f*))
+(expect "both as NULL" "SELECT NULL AS a, NULL AS b, NULL AS c;" (sqlite-expanded-sql ?*bd-st*))
+(bd-clear)
+
+; ------------------------------------------------------------
+; a statement that is mid-row takes no binding at all
+;
+; Between a SQLITE_ROW and the reset that follows it the statement is busy,
+; and SQLite refuses every bind on it as a misuse.  The wrapper reports that
+; the same way whichever shape the bind arrived in, and the statement takes
+; bindings again once it is reset.
+; ------------------------------------------------------------
+
+(expect "stepping to its row" SQLITE_ROW (sqlite-step ?*bd-st*))
+(bind ?*bd-r* (sqlite-bind ?*bd-st* (create$ 1 2 3)))
+(expect "a multifield is refused mid-row" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* 1))
+(expect "and a bare integer" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* 2.5))
+(expect "and a bare float" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* "text"))
+(expect "and a bare string" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* a-symbol))
+(expect "and a bare symbol" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* 2 "second"))
+(expect "and a value by position" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* :b "by name"))
+(expect "and one by name" FALSE ?*bd-r*)
+(bind ?*bd-f* (assert (bind-params (:a 21) (:b 22))))
+(bind ?*bd-r* (sqlite-bind ?*bd-st* ?*bd-f*))
+(expect "and a fact" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* ?*bd-i*))
+(expect "and an instance address" FALSE ?*bd-r*)
+(bind ?*bd-r* (sqlite-bind ?*bd-st* [bd-sub]))
+(expect "and an instance name" FALSE ?*bd-r*)
+
+(expect "resetting it" TRUE (sqlite-reset ?*bd-st*))
+(expect "lets it take a binding again" TRUE (sqlite-bind ?*bd-st* (create$ 1 2 3)))
+(expect "which lands" "SELECT 1 AS a, 2 AS b, 3 AS c;" (sqlite-expanded-sql ?*bd-st*))
+(bd-clear)
+
 (expect "finalizing it" TRUE (sqlite-finalize ?*bd-st*))
 (expect "closing the connection" TRUE (sqlite-close ?*bd-db*))

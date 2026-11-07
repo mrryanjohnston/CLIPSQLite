@@ -11,6 +11,7 @@
 
 (defglobal
   ?*pr-db* = FALSE
+  ?*pr-db2* = FALSE
   ?*pr-st* = FALSE
   ?*pr-r*  = nothing)
 
@@ -125,6 +126,26 @@
              (neq FALSE (str-index "UNIQUE constraint" (sqlite-errmsg ?*pr-db*))))
 (expect "finalizing it" TRUE (sqlite-finalize ?*pr-st*))
 
+; finalize reports the same failure when it is the first call after the step.
+; sqlite3_finalize releases the statement whatever it answers, so the handle
+; is emptied exactly as after a finalize that succeeded: the FALSE is a
+; report, not a statement left open.  The wrapper used to leave the freed
+; pointer in the handle, and a second finalize freed it twice.
+(bind ?*pr-db2* (sqlite-open :memory:))
+(expect "a connection of its own for this" TRUE (pointerp ?*pr-db2*))
+(expect "with a keyed table" (create$)
+        (sqlite-query-to-multifield ?*pr-db2* "CREATE TABLE u (a INTEGER PRIMARY KEY);"))
+(expect "holding one row" (create$)
+        (sqlite-query-to-multifield ?*pr-db2* "INSERT INTO u VALUES (1);"))
+(bind ?*pr-st* (sqlite-prepare ?*pr-db2* "INSERT INTO u VALUES (1);"))
+(bind ?*pr-r* (sqlite-step ?*pr-st*))
+(expect "the insert violates the key" FALSE ?*pr-r*)
+(bind ?*pr-r* (sqlite-finalize ?*pr-st*))
+(expect "and finalizing it straight away reports that" FALSE ?*pr-r*)
+(bind ?*pr-r* (sqlite-finalize ?*pr-st*))
+(expect "though the statement is gone all the same" FALSE ?*pr-r*)
+(expect "closing the connection" TRUE (sqlite-close ?*pr-db2*))
+
 ; ------------------------------------------------------------
 ; EXPLAIN as a mode of an already-compiled statement
 ;
@@ -142,6 +163,13 @@
 (expect "which it now reports" "EXPLAIN" (sqlite-stmt-isexplain ?*pr-st*))
 (expect-true "and the row shape changed with it" (> (sqlite-column-count ?*pr-st*) 1))
 (expect "the explained statement runs" SQLITE_ROW (sqlite-step ?*pr-st*))
+
+; the mode cannot change while a row is pending: SQLite answers SQLITE_BUSY
+; until the statement is reset, and the wrapper passes that on as a refusal
+(bind ?*pr-r* (sqlite-stmt-explain ?*pr-st* 2))
+(expect "the mode will not change mid-row" FALSE ?*pr-r*)
+(expect "and the statement is still what it was" "EXPLAIN" (sqlite-stmt-isexplain ?*pr-st*))
+
 (expect "resetting it" TRUE (sqlite-reset ?*pr-st*))
 
 (expect "switching it to EXPLAIN QUERY PLAN" TRUE (sqlite-stmt-explain ?*pr-st* 2))

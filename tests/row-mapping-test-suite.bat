@@ -208,4 +208,83 @@
 (expect "while the other columns still arrive" 7 (send ?*rm-i* get-v))
 
 (expect "finalizing it" TRUE (sqlite-finalize ?*rm-st*))
+
+; ------------------------------------------------------------
+; every storage class, by name
+;
+; The multifield form was checked against all five at the top.  The two
+; name-addressed forms read through the same mapping, so a BLOB reaches a
+; slot as a string and a NULL as nil, the same as they reach a field.
+; ------------------------------------------------------------
+
+(bind ?*rm-st* (sqlite-prepare ?*rm-db*
+  "SELECT 7 AS i, 2.5 AS f, 'text' AS t, x'414243' AS b, NULL AS n;"))
+(expect "stepping" SQLITE_ROW (sqlite-step ?*rm-st*))
+
+(bind ?*rm-f* (sqlite-row-to-fact ?*rm-st* row-types))
+(expect "the row of every storage class becomes a fact" FACT-ADDRESS (type ?*rm-f*))
+(expect "the BLOB is a string" "ABC" (fact-slot-value ?*rm-f* b))
+(expect "the NULL is nil" nil (fact-slot-value ?*rm-f* n))
+(expect "and the rest are what they were" 2.5 (fact-slot-value ?*rm-f* f))
+
+(bind ?*rm-i* (sqlite-row-to-instance ?*rm-st* ROW-TYPES))
+(expect "and an instance" TRUE (instance-addressp ?*rm-i*))
+(expect "with the BLOB a string" "ABC" (send ?*rm-i* get-b))
+(expect "the NULL nil" nil (send ?*rm-i* get-n))
+(expect "and the integer an integer" 7 (send ?*rm-i* get-i))
+
+(expect "finalizing it" TRUE (sqlite-finalize ?*rm-st*))
+
+; ------------------------------------------------------------
+; mapping a row while the rule network is matching
+;
+; CLIPS will not assert a fact, nor make an instance of a reactive class,
+; while it is in the middle of pattern matching -- and a test CE runs in the
+; middle of pattern matching.  So a wrapper called from one has its build
+; refused by CLIPS, which says so on stderr in its own words, and the wrapper
+; answers a refusal rather than a fact.  The answer is kept by a deffunction
+; that binds it to a global: a bind written straight into the test CE is not
+; something CLIPS 6.4.2 survives, and the instance refusal halts the rule's
+; evaluation before anything after the call would run.
+; ------------------------------------------------------------
+
+(defglobal ?*rm-fired* = FALSE)
+(deffunction rm-record (?v)
+  (bind ?*rm-r* ?v))
+
+(bind ?*rm-st* (sqlite-prepare ?*rm-db* "SELECT 100 AS a, 200 AS b, 300 AS c;"))
+(expect "stepping" SQLITE_ROW (sqlite-step ?*rm-st*))
+
+(defrule rm-fact-while-matching
+  (rm-trigger-fact)
+  (test (rm-record (sqlite-row-to-fact ?*rm-st* row-abc)))
+  =>
+  (bind ?*rm-fired* TRUE))
+
+(bind ?*rm-r* nothing)
+(assert (rm-trigger-fact))
+(run)
+(expect "a fact cannot be mapped from inside a test CE" FALSE ?*rm-r*)
+(expect "so the rule did not fire" FALSE ?*rm-fired*)
+(expect "and nothing was asserted" 0
+        (length$ (find-all-facts ((?f row-abc)) (eq ?f:a 100))))
+
+(defrule rm-instance-while-matching
+  (rm-trigger-instance)
+  (test (rm-record (sqlite-row-to-instance ?*rm-st* ROW-ABC)))
+  =>
+  (bind ?*rm-fired* TRUE))
+
+(assert (rm-trigger-instance))
+(run)
+(expect "nor can an instance be made from inside one" FALSE ?*rm-fired*)
+(expect "and none was" 0
+        (length$ (find-all-instances ((?i ROW-ABC)) (eq ?i:a 100))))
+
+; the refusal leaves the wrapper working from outside a rule
+(bind ?*rm-f* (sqlite-row-to-fact ?*rm-st* row-abc))
+(expect "the same call from the top level asserts" FACT-ADDRESS (type ?*rm-f*))
+(expect "what it could not assert before" 100 (fact-slot-value ?*rm-f* a))
+
+(expect "finalizing it" TRUE (sqlite-finalize ?*rm-st*))
 (expect "closing the connection" TRUE (sqlite-close ?*rm-db*))

@@ -12,6 +12,7 @@
 (defglobal
   ?*oc-db*   = FALSE
   ?*oc-db2*  = FALSE
+  ?*oc-db3*  = FALSE
   ?*oc-r*    = nothing
   ?*oc-path* = "tests/tmp/open-close.db")
 
@@ -42,6 +43,7 @@
 (bind ?*oc-db* (sqlite-open ?*oc-path* SQLITE_OPEN_READONLY))
 (expect "a single flag symbol opens the database" TRUE (pointerp ?*oc-db*))
 (expect "and READONLY took effect" TRUE (sqlite-db-readonly ?*oc-db* main))
+(expect "which sqlite-db-exists still counts as existing" TRUE (sqlite-db-exists ?*oc-db* main))
 (expect "closing it" TRUE (sqlite-close ?*oc-db*))
 
 (bind ?*oc-db* (sqlite-open ?*oc-path* (create$ SQLITE_OPEN_READONLY)))
@@ -59,6 +61,75 @@
                             (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_CREATE SQLITE_OPEN_MEMORY)))
 (expect "SQLITE_OPEN_MEMORY opens a private in-memory database" TRUE (pointerp ?*oc-db*))
 (expect "which has no filename" FALSE (sqlite-db-filename ?*oc-db* main))
+(expect "closing it" TRUE (sqlite-close ?*oc-db*))
+
+; ------------------------------------------------------------
+; the rest of the flag vocabulary
+;
+; Six more names are spelled through to SQLite.  Two of them can be seen
+; from here: NOFOLLOW refuses a path that is a symbolic link, and SHAREDCACHE
+; has two connections share one page cache -- which shows as the second being
+; locked out of a table the first is writing, where a PRIVATECACHE connection
+; to the same file reads it as it was.  The mutex flags and EXRESCODE change
+; nothing this binding can observe, so for those the assertion is only that
+; the open takes them.
+; ------------------------------------------------------------
+
+(system "ln -sf open-close.db tests/tmp/open-close-link.db")
+
+(bind ?*oc-db* (sqlite-open "tests/tmp/open-close-link.db"))
+(expect "a symbolic link opens by default" TRUE (pointerp ?*oc-db*))
+(expect "closing it" TRUE (sqlite-close ?*oc-db*))
+
+(bind ?*oc-r* (sqlite-open "tests/tmp/open-close-link.db"
+                           (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_NOFOLLOW)))
+(expect "but not under SQLITE_OPEN_NOFOLLOW" FALSE ?*oc-r*)
+
+(bind ?*oc-db* (sqlite-open ?*oc-path* (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_NOFOLLOW)))
+(expect "which still opens the file the link pointed at" TRUE (pointerp ?*oc-db*))
+(expect "closing it" TRUE (sqlite-close ?*oc-db*))
+
+; a table for one connection to hold a write lock on
+(bind ?*oc-db* (sqlite-open ?*oc-path*))
+(expect "a table to lock" (create$)
+        (sqlite-query-to-multifield ?*oc-db* "CREATE TABLE oc_shared (a);"))
+(expect "closing it" TRUE (sqlite-close ?*oc-db*))
+
+(bind ?*oc-db* (sqlite-open ?*oc-path* (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_SHAREDCACHE)))
+(expect "a shared-cache connection opens" TRUE (pointerp ?*oc-db*))
+(bind ?*oc-db2* (sqlite-open ?*oc-path* (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_SHAREDCACHE)))
+(expect "and a second one sharing the cache" TRUE (pointerp ?*oc-db2*))
+(bind ?*oc-db3* (sqlite-open ?*oc-path* (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_PRIVATECACHE)))
+(expect "and a third with a cache of its own" TRUE (pointerp ?*oc-db3*))
+
+(expect "the first starts writing" (create$)
+        (sqlite-query-to-multifield ?*oc-db* "BEGIN IMMEDIATE;"))
+(expect "a row" (create$)
+        (sqlite-query-to-multifield ?*oc-db* "INSERT INTO oc_shared VALUES (1);"))
+
+(bind ?*oc-r* (sqlite-query-to-multifield ?*oc-db2* "SELECT count(*) FROM oc_shared;"))
+(expect "the connection sharing its cache cannot read the table meanwhile" (create$) ?*oc-r*)
+(expect "because the table is locked"
+        "database table is locked: oc_shared" (sqlite-errmsg ?*oc-db2*))
+(expect "while the private-cache connection reads it as it was"
+        (create$ 0) (sqlite-query-to-multifield ?*oc-db3* "SELECT count(*) FROM oc_shared;"))
+
+(expect "rolling back" (create$) (sqlite-query-to-multifield ?*oc-db* "ROLLBACK;"))
+(expect "closing the private-cache connection" TRUE (sqlite-close ?*oc-db3*))
+(expect "and the shared ones" TRUE (sqlite-close ?*oc-db2*))
+(expect "both of them" TRUE (sqlite-close ?*oc-db*))
+
+(bind ?*oc-db* (sqlite-open :memory: (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_CREATE
+                                              SQLITE_OPEN_NOMUTEX)))
+(expect "SQLITE_OPEN_NOMUTEX is taken" TRUE (pointerp ?*oc-db*))
+(expect "closing it" TRUE (sqlite-close ?*oc-db*))
+(bind ?*oc-db* (sqlite-open :memory: (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_CREATE
+                                              SQLITE_OPEN_FULLMUTEX)))
+(expect "so is SQLITE_OPEN_FULLMUTEX" TRUE (pointerp ?*oc-db*))
+(expect "closing it" TRUE (sqlite-close ?*oc-db*))
+(bind ?*oc-db* (sqlite-open :memory: (create$ SQLITE_OPEN_READWRITE SQLITE_OPEN_CREATE
+                                              SQLITE_OPEN_EXRESCODE)))
+(expect "and SQLITE_OPEN_EXRESCODE" TRUE (pointerp ?*oc-db*))
 (expect "closing it" TRUE (sqlite-close ?*oc-db*))
 
 ; ------------------------------------------------------------

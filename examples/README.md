@@ -11,8 +11,8 @@ To run one by hand, with the binary the build produced:
 ```
 
 Nothing here needs a server, a database file or a configuration of any
-kind. The first two work in a `:memory:` database, which lives as long as
-the connection; the third writes one file under `examples/tmp` and removes
+kind. All but the third work in a `:memory:` database, which lives as long
+as the connection; the third writes one file under `examples/tmp` and removes
 it again on the way out. Run them from the top of the repository, which is
 where those relative paths are resolved.
 
@@ -28,3 +28,4 @@ machines: a SQLite version, a page count, the order the agenda fired in.
 | [1-rules-over-sql.bat](1-rules-over-sql.bat) | Rows become facts, and rules draw the conclusions |
 | [2-prepared-statements.bat](2-prepared-statements.bat) | Placeholders, and why a value out of a fact needs one |
 | [3-backup-to-disk.bat](3-backup-to-disk.bat) | Work done in memory, kept with the online backup API |
+| [4-reading-results.bat](4-reading-results.bat) | Every way of getting rows back: a cell, a row, or a whole query at a time |

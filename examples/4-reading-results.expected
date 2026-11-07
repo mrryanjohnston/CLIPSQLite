@@ -1,0 +1,23 @@
+# See 1-rules-over-sql.expected for what this file is.
+1. a cell at a time
+  name  mass  moons
+  Earth (SQLITE_TEXT)  1.0 (SQLITE_FLOAT)  1 (SQLITE_INTEGER)
+  Venus (SQLITE_TEXT)  0.815 (SQLITE_FLOAT)  0 (SQLITE_INTEGER)
+2. a row at a time, as a multifield
+  Mars has 2 moon(s)
+  Mercury has 0 moon(s)
+3. a row at a time, as a fact
+  asserted 4 facts
+  Mercury has no moons
+  Venus has no moons
+4. a row at a time, as an instance
+  [Earth] with mass 1.0
+  [Mars] with mass 0.107
+5. the whole statement at once
+  with at least one moon: ("name" "mass" "moons" "Earth" 1.0 1 "Mars" 0.107 2)
+  4 facts answered, 4 in working memory
+  4 instances, the first two named [first] and [second]
+6. the whole query at once
+  heaviest: ("Earth")
+  4 facts of the inferred deftemplate planet
+  4 instances of PLANET, named [Earth] [Mars] [Mercury] [Venus]

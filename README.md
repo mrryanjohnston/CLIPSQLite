@@ -127,7 +127,7 @@ against the previous choice in place.
 
 ## Examples
 
-[`examples/`](examples) holds three complete programs, each with a
+[`examples/`](examples) holds four complete programs, each with a
 `.expected` file that `make test` checks it against:
 
 | | |
@@ -135,6 +135,7 @@ against the previous choice in place.
 | [1-rules-over-sql.bat](examples/1-rules-over-sql.bat) | Rows become facts, and rules draw the conclusions |
 | [2-prepared-statements.bat](examples/2-prepared-statements.bat) | Placeholders, and why a value out of a fact needs one |
 | [3-backup-to-disk.bat](examples/3-backup-to-disk.bat) | Work done in memory, kept with the online backup API |
+| [4-reading-results.bat](examples/4-reading-results.bat) | Every way of getting rows back: a cell, a row, or a whole query at a time |
 
 Run one from the top of the repository:
 
@@ -617,7 +618,9 @@ Dispose of the prepared statement when done with it.
 
 #### Returns
 
-- `<BOOLEAN>` - `TRUE` if successfully finalized.
+- `<BOOLEAN>` - `TRUE` if successfully finalized. `FALSE` reports the error of
+  the statement's most recent step; the statement is released either way, and
+  the pointer is emptied.
 
 #### Example
 
@@ -887,6 +890,227 @@ Returns the current row of the prepared statement as a COOL instance.
 (instance-name ?*instance*) ; [gen-1]
 (send ?*instance* get-id) ; 1
 (send ?*instance* get-_name) ; "Foo baz"
+```
+
+### `(sqlite-stmt-to-facts <STATEMENT-POINTER> <DEFTEMPLATE-NAME>)` -> `MULTIFIELD` or `BOOLEAN`
+
+Walks every row a prepared statement has left, asserts one fact per row, and
+returns a multifield of the fact addresses in row order. Each column name is a
+slot name on the deftemplate; a column with no slot of that name is skipped.
+
+The walk starts with the row under the cursor, if a `sqlite-step` has left the
+statement on one, and steps until `SQLITE_DONE`. The statement is then reset,
+so it can be bound and walked again. A row whose value a slot's constraints
+refuse is skipped rather than asserted half-filled, with a note on `STDERR`.
+CLIPS refuses a duplicate fact, and in its place the answer holds the fact
+that already carries the row.
+
+This is `sqlite-row-to-fact` in a loop, and the difference from
+`sqlite-query-to-facts` is that a prepared statement carries its bindings.
+
+#### Arguments
+
+- `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<DEFTEMPLATE-NAME>` - A symbol or string naming the deftemplate to assert.
+
+#### Returns
+
+- `<MULTIFIELD>` - One fact address per row, in row order.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(deftemplate foo (slot id) (slot name))
+(defglobal ?*stmt-w1* = (sqlite-prepare ?*db* "SELECT id, name FROM foos WHERE id > ?"))
+(sqlite-bind ?*stmt-w1* 1 1)
+(sqlite-stmt-to-facts ?*stmt-w1* foo) ; (<Fact-1> <Fact-2>)
+(sqlite-finalize ?*stmt-w1*)
+```
+
+### `(sqlite-stmt-to-instances <STATEMENT-POINTER> <DEFCLASS-NAME> [<INSTANCE-NAMES>])` -> `MULTIFIELD` or `BOOLEAN`
+
+Walks every row a prepared statement has left, makes one instance per row,
+and returns a multifield of the instance addresses in row order. Each column
+name is a slot name on the defclass, inherited slots included; a column with
+no slot of that name is skipped. Because an instance's name is not a slot, a
+column called `name` goes to the slot `_name`, as it does for
+`sqlite-row-to-instance`.
+
+Instances are not deduplicated: walking the same rows twice makes two sets.
+
+`<INSTANCE-NAMES>` is positional: the nth name goes to the nth row. A row past
+the end of the list is named by CLIPS, which is what every row gets when the
+argument is left out. A single symbol, string or instance name names the first
+row and nothing else.
+
+Otherwise as `sqlite-stmt-to-facts`, including which row the walk starts on
+and that the statement is reset afterwards.
+
+#### Arguments
+
+- `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `<DEFCLASS-NAME>` - A symbol or string naming the defclass to instantiate.
+- `[<INSTANCE-NAMES>]` - A multifield of names for the rows, in row order, or one name for the first row. Leave out to let CLIPS name them all.
+
+#### Returns
+
+- `<MULTIFIELD>` - One instance address per row, in row order.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defclass FOO (is-a USER) (slot id) (slot _name))
+(defglobal ?*stmt-w2* = (sqlite-prepare ?*db* "SELECT id, name FROM foos ORDER BY id"))
+(sqlite-stmt-to-instances ?*stmt-w2* FOO (create$ first second))
+; (<Instance-first> <Instance-second> <Instance-gen1>)
+(sqlite-finalize ?*stmt-w2*)
+```
+
+### `(sqlite-stmt-to-multifield <STATEMENT-POINTER> [<HEADERS>])` -> `MULTIFIELD` or `BOOLEAN`
+
+Walks every row a prepared statement has left and returns the values as one
+flat multifield, row by row. Pass `TRUE` for `<HEADERS>` to get the column
+names, as strings, in front of the values. Cells are typed as `sqlite-column`
+types them: `INTEGER`, `FLOAT`, `STRING`, and the symbol `nil` for `NULL`.
+
+A statement with no rows answers an empty multifield, or its column names
+alone when they were asked for. A statement with no columns, such as a
+`CREATE` or an `INSERT`, is walked to `SQLITE_DONE` all the same, which makes
+this the shortest way to run one.
+
+Otherwise as `sqlite-stmt-to-facts`, including which row the walk starts on
+and that the statement is reset afterwards.
+
+#### Arguments
+
+- `<STATEMENT-POINTER>` - A pointer to a prepared statement.
+- `[<HEADERS>]` - `TRUE` to put the column names in front of the values. Defaults to `FALSE`.
+
+#### Returns
+
+- `<MULTIFIELD>` - The values row by row, preceded by the column names when `<HEADERS>` is `TRUE`.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defglobal ?*stmt-w3* = (sqlite-prepare ?*db* "SELECT id, name FROM foos ORDER BY id"))
+(sqlite-stmt-to-multifield ?*stmt-w3*)      ; (1 "Foo baz" 2 "Bar")
+(sqlite-stmt-to-multifield ?*stmt-w3* TRUE) ; ("id" "name" 1 "Foo baz" 2 "Bar")
+(sqlite-finalize ?*stmt-w3*)
+```
+
+### `(sqlite-query-to-facts <DB-POINTER> <SQL-QUERY> [<DEFTEMPLATE-NAME>])` -> `MULTIFIELD` or `BOOLEAN`
+
+Prepares the query, asserts one fact per row, finalizes the statement, and
+returns the fact addresses in row order. Every fact is in working memory
+before the call returns.
+
+The deftemplate is optional. Left out, it is the table the result's columns
+come from, as SQLite reports it: a query whose columns all come from one table
+asserts facts of the deftemplate with that table's name. A query with no
+column from a table, or with columns from more than one, has no single name
+to infer and is refused; name the deftemplate for those. An expression column
+such as `count(*)` comes from no table and does not get in the way.
+
+Column names are slot names, so a SQL alias is how a column and a slot are
+made to agree. The query is one statement; a second statement after it is
+refused rather than dropped.
+
+In every other respect as `sqlite-stmt-to-facts`, which this is a wrapper
+over.
+
+#### Arguments
+
+- `<DB-POINTER>` - A pointer to an open database.
+- `<SQL-QUERY>` - A string holding one SQL statement.
+- `[<DEFTEMPLATE-NAME>]` - A symbol or string naming the deftemplate to assert. Defaults to the one table the columns come from.
+
+#### Returns
+
+- `<MULTIFIELD>` - One fact address per row, in row order.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(deftemplate foos (slot id) (slot name))
+(sqlite-query-to-facts ?*db* "SELECT id, name FROM foos ORDER BY id")
+; (<Fact-1> <Fact-2>)
+
+(deftemplate tally (slot name) (slot n))
+(sqlite-query-to-facts ?*db* "SELECT name, count(*) AS n FROM foos GROUP BY name" tally)
+; (<Fact-3> <Fact-4>)
+```
+
+### `(sqlite-query-to-instances <DB-POINTER> <SQL-QUERY> [<DEFCLASS-NAME>] [<INSTANCE-NAMES>])` -> `MULTIFIELD` or `BOOLEAN`
+
+Prepares the query, makes one instance per row, finalizes the statement, and
+returns the instance addresses in row order.
+
+The defclass is optional and inferred the way `sqlite-query-to-facts` infers
+a deftemplate, except that the table name is uppercased: a query over `foos`
+looks for `FOOS`.
+
+`<INSTANCE-NAMES>` names the rows exactly as it does for
+`sqlite-stmt-to-instances`. Because the defclass in front of it is itself
+optional, a multifield in the third position is read as the names, and the
+class is inferred; a symbol or string there is always the defclass.
+
+In every other respect as `sqlite-stmt-to-instances`.
+
+#### Arguments
+
+- `<DB-POINTER>` - A pointer to an open database.
+- `<SQL-QUERY>` - A string holding one SQL statement.
+- `[<DEFCLASS-NAME>]` - A symbol or string naming the defclass to instantiate. Defaults to the one table the columns come from, uppercased.
+- `[<INSTANCE-NAMES>]` - A multifield of names for the rows, in row order, or one name for the first row. Leave out to let CLIPS name them all.
+
+#### Returns
+
+- `<MULTIFIELD>` - One instance address per row, in row order.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(defclass FOOS (is-a USER) (slot id) (slot _name))
+(sqlite-query-to-instances ?*db* "SELECT id, name FROM foos ORDER BY id")
+; (<Instance-gen1> <Instance-gen2>)
+(sqlite-query-to-instances ?*db* "SELECT id, name FROM foos ORDER BY id" (create$ first))
+; (<Instance-first> <Instance-gen3>)
+```
+
+### `(sqlite-query-to-multifield <DB-POINTER> <SQL-QUERY> [<HEADERS>])` -> `MULTIFIELD` or `BOOLEAN`
+
+Prepares the query, finalizes the statement, and returns the whole result as
+one flat multifield: the values row by row, with the column names in front of
+them when `<HEADERS>` is `TRUE`. As `sqlite-stmt-to-multifield`, which this
+is a wrapper over, including that a statement with no rows to give back is
+run all the same.
+
+#### Arguments
+
+- `<DB-POINTER>` - A pointer to an open database.
+- `<SQL-QUERY>` - A string holding one SQL statement.
+- `[<HEADERS>]` - `TRUE` to put the column names in front of the values. Defaults to `FALSE`.
+
+#### Returns
+
+- `<MULTIFIELD>` - The values row by row, preceded by the column names when `<HEADERS>` is `TRUE`.
+- `<BOOLEAN>` - `FALSE` if something went wrong
+
+#### Example
+
+```clips
+(sqlite-query-to-multifield ?*db* "CREATE TABLE foos (id INTEGER, name TEXT)") ; ()
+(sqlite-query-to-multifield ?*db* "INSERT INTO foos VALUES (1, 'Foo baz'), (2, 'Bar')") ; ()
+(sqlite-query-to-multifield ?*db* "SELECT id, name FROM foos ORDER BY id")
+; (1 "Foo baz" 2 "Bar")
+(sqlite-query-to-multifield ?*db* "SELECT id, name FROM foos ORDER BY id" TRUE)
+; ("id" "name" 1 "Foo baz" 2 "Bar")
 ```
 
 ### `(sqlite-column-count <STATEMENT-POINTER>)` -> `INTEGER` or `BOOLEAN`
@@ -1241,7 +1465,8 @@ Cleans up the backup once finished.
 
 #### Returns
 
-- `<BOOLEAN>` - `TRUE` on success, `FALSE` on failure
+- `<BOOLEAN>` - `TRUE` on success, `FALSE` if a step left an error behind.
+  The backup object is released either way, and the pointer is emptied.
 
 #### Example
 
